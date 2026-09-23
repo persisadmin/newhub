@@ -2,12 +2,18 @@
 # node:20-slim (glibc) — required for native deps (esbuild, unrs-resolver).
 # npm is upgraded first: the npm 10.8.2 bundled with node:20 images crashes
 # during `npm ci` ("Exit handler never called").
+#
+# NOTE: the deps stage regenerates package-lock.json against the public npm
+# registry before `npm ci`. This makes the build immune to lockfiles whose
+# `resolved` URLs point at unreachable private mirrors.
 
 FROM node:20-slim AS deps
 WORKDIR /app
 RUN npm install -g npm@11
 COPY package.json package-lock.json ./
-RUN npm ci --no-audit --no-fund
+RUN npm config set registry https://registry.npmjs.org \
+ && npm install --package-lock-only --registry=https://registry.npmjs.org --no-audit --no-fund \
+ && npm ci --no-audit --no-fund
 
 FROM node:20-slim AS build
 WORKDIR /app
