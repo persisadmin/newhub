@@ -1,5 +1,11 @@
-import { auth } from "@/auth";
+import NextAuth from "next-auth";
 import { NextResponse } from "next/server";
+import authConfig from "@/auth.config";
+
+// Middleware runs in the edge runtime — it uses ONLY the edge-safe authConfig
+// (JWT session check, no database). The full auth config with providers and
+// MongoDB lives in auth.ts and is used by route handlers and server components.
+const { auth } = NextAuth(authConfig);
 
 export default auth((req) => {
   const isAuthed = !!req.auth;

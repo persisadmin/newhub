@@ -6,6 +6,7 @@ import { ObjectId } from "mongodb";
 import { getDb, ensureIndexes } from "@/lib/db";
 import { getEnv } from "@/lib/env";
 import { audit } from "@/lib/audit";
+import authConfig from "@/auth.config";
 import type { UserDoc } from "@/lib/domain/types";
 
 const env = getEnv();
@@ -36,10 +37,8 @@ const providers = [
 ];
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  session: { strategy: "jwt", maxAge: 30 * 24 * 60 * 60 },
-  pages: { signIn: "/login" },
+  ...authConfig,
   secret: env.NEXTAUTH_SECRET,
-  trustHost: true,
   providers,
   callbacks: {
     async signIn({ user }) {
