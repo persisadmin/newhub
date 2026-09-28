@@ -115,3 +115,4 @@ Every record carries `source`, `sourceRef`, `sourceItemNo`, `section`, and
 `effectiveDate` for full provenance in the pricing review UI. The parser skips
 front matter automatically (override with a second arg: page count to skip).
 # finale
+# finale
