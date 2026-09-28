@@ -5,7 +5,7 @@ import { getEnv } from "@/lib/env";
 import { audit } from "@/lib/audit";
 import { grantCredits } from "@/lib/services/credits";
 import { buildDuitNowPayload } from "@/lib/services/duitnow";
-import { redeemCoupon } from "@/lib/services/coupons";
+import { redeemCoupon, discountedPriceSen } from "@/lib/services/coupons";
 import type { PaymentDoc, SubscriptionDoc } from "@/lib/domain/types";
 
 /**
@@ -95,14 +95,15 @@ export async function initiatePayment(userId: ObjectId, plan: PlanKey, interval:
     { $set: { status: "expired", updatedAt: now } }
   );
 
-  // Coupon (e.g. RM0.10 test purchases) overrides the price entirely.
-  // Customers always pay the EXACT listed price — the QR carries the amount
-  // (tag 54) and a unique payment reference (tag 62) for reconciliation.
+  // Coupon: percentage discount (or legacy fixed price) off the package price.
+  // Customers always pay the exact final amount — the QR carries it (tag 54)
+  // plus a unique payment reference (tag 62) for reconciliation.
   let baseSen: number = PLANS[plan].price;
   let redeemedCode: string | undefined;
   if (couponCode) {
-    const coupon = await redeemCoupon(couponCode); // throws CouponError when invalid
-    baseSen = coupon.priceSen;
+    const userDoc = await db.collection("users").findOne({ _id: userId }, { projection: { email: 1 } });
+    const coupon = await redeemCoupon(couponCode, { plan, email: (userDoc?.email as string) ?? null }); // throws CouponError when invalid
+    baseSen = discountedPriceSen(baseSen, coupon);
     redeemedCode = coupon.code;
   }
   const amountSen = baseSen;

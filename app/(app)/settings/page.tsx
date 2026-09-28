@@ -98,7 +98,7 @@ export default function SettingsPage() {
     const json = await res.json();
     if (!json.ok) {
       setError(json.error?.message ?? "Could not initiate payment.");
-      if (["NOT_FOUND", "INACTIVE", "EXHAUSTED"].includes(json.error?.code)) setCouponApplied(null);
+      if (["NOT_FOUND", "INACTIVE", "EXHAUSTED", "NOT_STARTED", "EXPIRED", "NOT_ELIGIBLE"].includes(json.error?.code)) setCouponApplied(null);
       return;
     }
     setPaying(json.data);

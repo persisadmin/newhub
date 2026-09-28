@@ -27,7 +27,11 @@ interface Billing { creditMultiplier: number; usdToMyr: number; prices: Provider
 
 interface PendingPayment { providerRef: string; amount: number; plan: string; status: string; createdAt: string; userEmail: string }
 interface NotifyLog { _id: string; text: string; amountsSen: number[]; matched: boolean; createdAt: string }
-interface Coupon { _id: string; code: string; priceSen: number; maxUses: number | null; usedCount: number; active: boolean; note: string | null; createdAt: string }
+interface Coupon {
+  _id: string; code: string; discountPct: number | null; priceSen: number | null;
+  startsAt: string | null; endsAt: string | null; audience: string; userEmail: string | null;
+  maxUses: number | null; usedCount: number; active: boolean; note: string | null; createdAt: string;
+}
 interface Promo { enabled: boolean; startsAt: string; endsAt: string; trialDays: number; credits: number }
 interface DuitNowPreview { configured: boolean; previewPayload: string | null; fields: [string, string][] }
 
@@ -44,7 +48,11 @@ export default function AdminLlmSettingsPage() {
   const [notifyLog, setNotifyLog] = useState<NotifyLog[] | null>(null);
   const [confirmingRef, setConfirmingRef] = useState<string | null>(null);
   const [coupons, setCoupons] = useState<Coupon[] | null>(null);
-  const [couponForm, setCouponForm] = useState({ code: "", priceRm: "0.10", maxUses: "" });
+  const [couponForm, setCouponForm] = useState({
+    code: "", discountPct: "10",
+    startsAt: toLocalInput(new Date()), endsAt: toLocalInput(new Date(Date.now() + 14 * 864e5)),
+    audience: "all", userEmail: "", maxUses: "",
+  });
   const [couponMsg, setCouponMsg] = useState<string | null>(null);
   const [couponBusy, setCouponBusy] = useState(false);
   const [maintenance, setMaintenance] = useState<boolean | null>(null);
@@ -93,24 +101,31 @@ export default function AdminLlmSettingsPage() {
 
   async function createCoupon() {
     setCouponBusy(true); setCouponMsg(null);
-    const priceSen = Math.round(parseFloat(couponForm.priceRm || "0") * 100);
     const res = await fetch("/api/admin/coupons", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         code: couponForm.code,
-        priceSen,
+        discountPct: Number(couponForm.discountPct),
+        startsAt: new Date(couponForm.startsAt).toISOString(),
+        endsAt: new Date(couponForm.endsAt).toISOString(),
+        audience: couponForm.audience,
+        userEmail: couponForm.audience === "user" ? couponForm.userEmail.trim() : undefined,
         maxUses: couponForm.maxUses ? Number(couponForm.maxUses) : null,
       }),
     });
     const json = await res.json();
     setCouponBusy(false);
-    if (json.ok) { setCouponForm({ code: "", priceRm: "0.10", maxUses: "" }); setCouponMsg(`Coupon ${json.data.coupon.code} created.`); loadCoupons(); }
+    if (json.ok) {
+      setCouponForm({ ...couponForm, code: "", userEmail: "", maxUses: "" });
+      setCouponMsg(`Coupon ${json.data.coupon.code} created (−${json.data.coupon.discountPct}%).`);
+      loadCoupons();
+    }
     else setCouponMsg(json.error?.message ?? "Could not create coupon.");
   }
 
-  async function toggleCoupon(code: string, active: boolean) {
+  async function toggleCoupon(id: string, active: boolean) {
     await fetch("/api/admin/coupons", {
-      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code, active }),
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, active }),
     });
     loadCoupons();
   }
@@ -462,26 +477,61 @@ export default function AdminLlmSettingsPage() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Coupons</CardTitle>
-          <CardDescription>Override the package price at checkout — e.g. a RM0.10 coupon to test the real payment bridge end-to-end.</CardDescription>
+          <CardDescription>
+            Exclusive percentage discounts (1–99% off the package price) with a start/end window and an audience —
+            everyone, one package tier, or a specific user email. A name can&rsquo;t be used by two coupons active at the same time.
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="flex flex-wrap items-end gap-3">
             <div className="space-y-1">
-              <Label className="text-xs">Code</Label>
-              <Input className="w-40 uppercase" placeholder="PERSISTEST" value={couponForm.code}
+              <Label className="text-xs">Name</Label>
+              <Input className="w-40 uppercase" placeholder="MERDEKA30" value={couponForm.code}
                 onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} />
             </div>
             <div className="space-y-1">
-              <Label className="text-xs">Price (RM)</Label>
-              <Input className="w-28" type="number" min="0.01" step="0.01" value={couponForm.priceRm}
-                onChange={(e) => setCouponForm({ ...couponForm, priceRm: e.target.value })} />
+              <Label className="text-xs">Discount %</Label>
+              <Input className="w-24" type="number" min="1" max="99" value={couponForm.discountPct}
+                onChange={(e) => setCouponForm({ ...couponForm, discountPct: e.target.value })} />
             </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Starts</Label>
+              <Input type="datetime-local" value={couponForm.startsAt}
+                onChange={(e) => setCouponForm({ ...couponForm, startsAt: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Ends</Label>
+              <Input type="datetime-local" value={couponForm.endsAt}
+                onChange={(e) => setCouponForm({ ...couponForm, endsAt: e.target.value })} />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Who can use it</Label>
+              <select
+                className="h-9 rounded-md border border-input bg-background px-3 text-sm"
+                value={couponForm.audience}
+                onChange={(e) => setCouponForm({ ...couponForm, audience: e.target.value })}
+              >
+                <option value="all">Everyone</option>
+                <option value="starter">Starter package</option>
+                <option value="professional">Professional package</option>
+                <option value="enterprise">Enterprise package</option>
+                <option value="user">Specific user email</option>
+              </select>
+            </div>
+            {couponForm.audience === "user" && (
+              <div className="space-y-1">
+                <Label className="text-xs">User email</Label>
+                <Input className="w-56" type="email" placeholder="customer@example.com" value={couponForm.userEmail}
+                  onChange={(e) => setCouponForm({ ...couponForm, userEmail: e.target.value })} />
+              </div>
+            )}
             <div className="space-y-1">
               <Label className="text-xs">Max uses (blank = unlimited)</Label>
               <Input className="w-40" type="number" min="1" placeholder="unlimited" value={couponForm.maxUses}
                 onChange={(e) => setCouponForm({ ...couponForm, maxUses: e.target.value })} />
             </div>
-            <Button size="sm" onClick={createCoupon} disabled={couponBusy || couponForm.code.trim().length < 3}>
+            <Button size="sm" onClick={createCoupon}
+              disabled={couponBusy || couponForm.code.trim().length < 3 || (couponForm.audience === "user" && !couponForm.userEmail.trim())}>
               {couponBusy ? <Loader2 size={12} className="animate-spin" /> : <Plus size={14} />} Create coupon
             </Button>
           </div>
@@ -498,10 +548,13 @@ export default function AdminLlmSettingsPage() {
                   <div>
                     <p className="font-mono font-medium">{c.code} <Badge variant={c.active ? "default" : "secondary"}>{c.active ? "active" : "inactive"}</Badge></p>
                     <p className="text-xs text-muted-foreground">
-                      RM {(c.priceSen / 100).toFixed(2)} · used {c.usedCount}{c.maxUses != null ? ` / ${c.maxUses}` : " (unlimited)"} · created {new Date(c.createdAt).toLocaleDateString("en-MY")}
+                      {c.discountPct != null ? `−${c.discountPct}% off` : `RM ${((c.priceSen ?? 0) / 100).toFixed(2)} (legacy)`}
+                      {" · "}{c.audience === "user" ? `only ${c.userEmail}` : c.audience === "all" ? "everyone" : `${c.audience} package`}
+                      {c.startsAt && c.endsAt && <> · {new Date(c.startsAt).toLocaleString("en-MY")} → {new Date(c.endsAt).toLocaleString("en-MY")}</>}
+                      {" · "}used {c.usedCount}{c.maxUses != null ? ` / ${c.maxUses}` : " (unlimited)"}
                     </p>
                   </div>
-                  <Button size="sm" variant="outline" onClick={() => toggleCoupon(c.code, !c.active)}>
+                  <Button size="sm" variant="outline" onClick={() => toggleCoupon(c._id, !c.active)}>
                     {c.active ? "Deactivate" : "Activate"}
                   </Button>
                 </li>

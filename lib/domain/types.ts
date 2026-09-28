@@ -168,6 +168,37 @@ export interface ContractorPriceDoc {
 
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "cancelled" | "none";
 
+export type PriceSubmissionKind = "benchmark" | "quotation";
+export type PriceSubmissionStatus = "pending_review" | "committed" | "discarded";
+
+export interface PriceRow {
+  description: string;
+  unit: string;
+  price: number;
+}
+
+/**
+ * A submitted price document: admins upload government agency price lists
+ * (→ benchmark_prices on commit), users upload supplier quotations
+ * (→ their contractor_prices library on commit). Rows are LLM-extracted,
+ * reviewed in the UI, then committed.
+ */
+export interface PriceSubmissionDoc {
+  _id: ObjectId;
+  kind: PriceSubmissionKind;
+  userId: ObjectId;
+  userEmail: string;
+  /** Agency name (benchmark) or supplier name (quotation). */
+  sourceName: string;
+  effectiveDate?: Date;
+  filename: string;
+  rows: PriceRow[];
+  status: PriceSubmissionStatus;
+  committedRows?: number;
+  createdAt: Date;
+  committedAt?: Date;
+}
+
 export interface SubscriptionDoc {
   _id: ObjectId;
   userId: ObjectId;
@@ -205,12 +236,22 @@ export interface PaymentDoc {
 }
 
 /** Admin-managed coupon: overrides the package price (e.g. RM0.10 test purchases). */
+export type CouponAudience = "all" | "starter" | "professional" | "enterprise" | "user";
+
 export interface CouponDoc {
   _id: ObjectId;
-  /** Uppercase unique code, e.g. "PERSISTEST". */
+  /** Uppercase coupon name, e.g. "MERDEKA30". Names may be reused, but never
+   *  by two coupons whose active windows overlap. */
   code: string;
-  /** Final amount charged when redeemed (sen). */
-  priceSen: number;
+  /** Percentage discount off the package price (1–99). */
+  discountPct: number;
+  /** Active window. */
+  startsAt: Date;
+  endsAt: Date;
+  /** Who may redeem: everyone, one package tier, or a specific user. */
+  audience: CouponAudience;
+  /** Lowercased email — required when audience = "user". */
+  userEmail?: string;
   /** Max redemptions; null = unlimited. */
   maxUses: number | null;
   usedCount: number;
@@ -219,6 +260,8 @@ export interface CouponDoc {
   createdBy: ObjectId;
   createdAt: Date;
   updatedAt: Date;
+  /** Legacy field from the fixed-price coupon design (pre-percentage). */
+  priceSen?: number;
 }
 
 /** Raw record of a payment notification forwarded from the merchant's phone. */

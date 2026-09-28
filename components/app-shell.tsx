@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useState } from "react";
-import { LayoutDashboard, FolderKanban, Flag, Settings, ShieldCheck, LogOut, Menu, X } from "lucide-react";
+import { LayoutDashboard, FolderKanban, Flag, Settings, ShieldCheck, LogOut, Menu, X, Tags, Landmark } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -11,10 +11,14 @@ const NAV = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/projects", label: "Projects", icon: FolderKanban },
   { href: "/pricing/review", label: "Pricing Review", icon: Flag },
+  { href: "/prices", label: "Price Library", icon: Tags },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
-const ADMIN_NAV = [{ href: "/admin/settings", label: "Admin", icon: ShieldCheck }];
+const ADMIN_NAV = [
+  { href: "/admin/settings", label: "Admin", icon: ShieldCheck },
+  { href: "/admin/price-lists", label: "Agency Price Lists", icon: Landmark },
+];
 
 export function AppShell({ userName, userEmail, userRole, children }: { userName: string; userEmail: string; userRole?: string; children: React.ReactNode }) {
   const pathname = usePathname();

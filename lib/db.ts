@@ -49,7 +49,10 @@ export async function ensureIndexes(): Promise<void> {
     db.collection("payments").createIndex({ providerRef: 1 }, { unique: true }),
     db.collection("payments").createIndex({ status: 1, amount: 1 }),
     db.collection("payment_notifications").createIndex({ createdAt: -1 }),
-    db.collection("coupons").createIndex({ code: 1 }, { unique: true }),
+    // Coupon names are reusable across non-overlapping windows — drop the old
+    // unique index (no-op once dropped) and keep a plain lookup index.
+    db.collection("coupons").dropIndex("code_1").catch(() => {}),
+    db.collection("coupons").createIndex({ code: 1, createdAt: -1 }),
     db.collection("audit_logs").createIndex({ entityType: 1, entityId: 1, timestamp: -1 }),
     db.collection("audit_logs").createIndex({ userId: 1, timestamp: -1 }),
     db.collection("password_resets").createIndex({ tokenHash: 1 }),
@@ -57,5 +60,7 @@ export async function ensureIndexes(): Promise<void> {
     db.collection("processing_jobs").createIndex({ projectId: 1, attempt: -1 }),
     db.collection("project_documents").createIndex({ projectId: 1, type: 1 }),
     db.collection("credit_ledger").createIndex({ userId: 1, createdAt: -1 }),
+    db.collection("price_submissions").createIndex({ userId: 1, createdAt: -1 }),
+    db.collection("price_submissions").createIndex({ kind: 1, status: 1 }),
   ]);
 }
