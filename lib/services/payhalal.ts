@@ -19,7 +19,7 @@ import { logger } from "@/lib/logger";
  *   request  = sha256(secret + amount + currency + product_description + order_id
  *                     + customer_name + customer_email + customer_phone)
  *   callback = sha256(...same..., + transaction_id + status)
- *   reconcile= md5(merchant_id + app_id + secret)
+ *   reconcile= md5(merchant_id + app_key + secret)   ← note: app KEY, not app id
  *
  * Fields are concatenated with NO separators. Because the hash covers the exact
  * values sent, the request hash is always derived from the same object that is
@@ -30,6 +30,8 @@ export type PayHalalMode = "live" | "uat";
 
 export interface PayHalalConfig {
   appId: string;
+  /** App key from the dashboard (distinct from the app id) — used only for reconciliation. */
+  appKey: string;
   appSecret: string;
   /** Merchant email — required for the reconciliation API. */
   merchantId: string;
@@ -42,11 +44,15 @@ export function getPayHalalConfig(): PayHalalConfig | null {
   const appId = env.PAYHALAL_APP_ID?.trim();
   const appSecret = env.PAYHALAL_APP_SECRET?.trim();
   if (!appId || !appSecret) return null;
+  // Explicit PAYHALAL_MODE wins. Otherwise infer it: PayHalal's live app ids
+  // are prefixed "live-"; anything else is sent to the testing endpoints.
+  const mode: PayHalalMode = env.PAYHALAL_MODE ?? (appId.startsWith("live-") ? "live" : "uat");
   return {
     appId,
+    appKey: env.PAYHALAL_APP_KEY?.trim() ?? "",
     appSecret,
     merchantId: env.PAYHALAL_MERCHANT_ID?.trim() ?? "",
-    mode: env.PAYHALAL_MODE === "live" ? "live" : "uat",
+    mode,
   };
 }
 
@@ -244,13 +250,14 @@ function normaliseReconcileStatus(raw: string | undefined): ReconcileStatus {
 export async function reconcileTransaction(transactionId: string): Promise<ReconcileResult> {
   const cfg = getPayHalalConfig();
   if (!cfg) return { found: false, status: "unknown" };
-  if (!cfg.merchantId) {
-    logger.warn("payhalal.reconcile_no_merchant_id");
+  if (!cfg.merchantId || !cfg.appKey) {
+    logger.warn("payhalal.reconcile_missing_credentials", { merchantId: Boolean(cfg.merchantId), appKey: Boolean(cfg.appKey) });
     return { found: false, status: "unknown" };
   }
 
   const { reconcileUrl } = payHalalEndpoints(cfg.mode);
-  const hash = md5(cfg.merchantId + cfg.appId + cfg.appSecret);
+  // md5(merchant_id + app_key + app_secret) — the app KEY, not the app id.
+  const hash = md5(cfg.merchantId + cfg.appKey + cfg.appSecret);
   const url = `${reconcileUrl}?${new URLSearchParams({ transaction_id: transactionId, merchant_id: cfg.merchantId, hash })}`;
 
   try {

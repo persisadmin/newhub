@@ -20,10 +20,13 @@ const schema = z.object({
   // both PAYHALAL_APP_ID and PAYHALAL_APP_SECRET are set (from the merchant
   // dashboard → Developer Tools). UAT is the safe default.
   PAYHALAL_APP_ID: z.string().optional(),
+  /** App key from the dashboard (distinct from app id) — used only in the reconciliation hash. */
+  PAYHALAL_APP_KEY: z.string().optional(),
   PAYHALAL_APP_SECRET: z.string().optional(),
   /** Merchant email — required by PayHalal's transaction reconciliation API. */
   PAYHALAL_MERCHANT_ID: z.string().optional(),
-  PAYHALAL_MODE: z.enum(["live", "uat"]).default("uat"),
+  /** Explicit override. When unset, the mode is inferred from the app id prefix (live-… → live). */
+  PAYHALAL_MODE: z.enum(["live", "uat"]).optional(),
   // DuitNow QR bridge (phone-notification reconciliation)
   DUITNOW_STATIC_QR: z.string().optional(), // decoded payload of the existing merchant QR
   DUITNOW_ACQUIRER_ID: z.string().optional(),

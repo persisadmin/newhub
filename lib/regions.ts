@@ -1,4 +1,4 @@
-import table from "@/scripts/data/jkh-elektrik-2023-regions.json";
+import { KUMPULAN_LABELS_DATA, REGIONS_DATA } from "./regions-data";
 
 export type Kumpulan = "A" | "B" | "C" | "D";
 
@@ -11,9 +11,9 @@ export interface RegionAdjustment {
   D: number;
 }
 
-export const KUMPULAN_LABELS: Record<Kumpulan, string> = table.kumpulan as Record<Kumpulan, string>;
+export const KUMPULAN_LABELS: Record<Kumpulan, string> = KUMPULAN_LABELS_DATA;
 
-export const REGIONS: RegionAdjustment[] = table.regions as RegionAdjustment[];
+export const REGIONS: RegionAdjustment[] = REGIONS_DATA;
 
 export const REGION_STATES: string[] = [...new Set(REGIONS.map((r) => r.state))];
 

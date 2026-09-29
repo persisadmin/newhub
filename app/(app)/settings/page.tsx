@@ -52,6 +52,8 @@ export default function SettingsPage() {
   const [payMethods, setPayMethods] = useState<{ duitnow_qr: boolean; payhalal: boolean }>({ duitnow_qr: false, payhalal: false });
   /** Plan the customer picked, while they choose how to pay. */
   const [payMethodFor, setPayMethodFor] = useState<string | null>(null);
+  const [payStarting, setPayStarting] = useState<string | null>(null);
+  const [payError, setPayError] = useState<string | null>(null);
   const [returnNotice, setReturnNotice] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -141,6 +143,7 @@ export default function SettingsPage() {
   /** Customer picked a plan: ask how they want to pay (unless only one way works). */
   function choosePayment(plan: string) {
     setError(null);
+    setPayError(null);
     const available = (["payhalal", "duitnow_qr"] as const).filter((m) => payMethods[m]);
     // None reported (e.g. still loading): the QR flow always has a provider, so use it.
     if (available.length === 0) { startPayment(plan, "duitnow_qr"); return; }
@@ -150,20 +153,30 @@ export default function SettingsPage() {
 
   async function startPayment(plan: string, method: "duitnow_qr" | "payhalal") {
     setError(null);
-    setPayMethodFor(null);
-    const res = await fetch("/api/payments/initiate", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method }),
-    });
-    const json = await res.json();
-    if (!json.ok) {
-      setError(json.error?.message ?? "Could not initiate payment.");
-      if (["NOT_FOUND", "INACTIVE", "EXHAUSTED", "NOT_STARTED", "EXPIRED", "NOT_ELIGIBLE"].includes(json.error?.code)) setCouponApplied(null);
-      return;
+    setPayError(null);
+    setPayStarting(method);
+    try {
+      const res = await fetch("/api/payments/initiate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!json?.ok) {
+        // Keep the chooser open so the failure is visible, not a silent dead click.
+        const msg = json?.error?.message ?? "Could not initiate payment. Please try again.";
+        setPayError(msg);
+        if (["NOT_FOUND", "INACTIVE", "EXHAUSTED", "NOT_STARTED", "EXPIRED", "NOT_ELIGIBLE"].includes(json?.error?.code)) setCouponApplied(null);
+        return;
+      }
+      setPayMethodFor(null);
+      // PayHalal hosts the payment page, so hand the browser over to it.
+      if (json.data.redirectUrl) { window.location.href = json.data.redirectUrl; return; }
+      setPaying(json.data);
+    } catch {
+      setPayError("Network error — please check your connection and try again.");
+    } finally {
+      setPayStarting(null);
     }
-    // PayHalal hosts the payment page, so hand the browser over to it.
-    if (json.data.redirectUrl) { window.location.href = json.data.redirectUrl; return; }
-    setPaying(json.data);
   }
 
   async function verify() {
@@ -377,9 +390,15 @@ export default function SettingsPage() {
               Credits and subscription activate automatically once your payment is received. This page checks every few seconds.
             </p>
             {paying.provider === "tng_mock" && (
-              <Button className="w-full" onClick={verify} disabled={verifying}>
-                {verifying && <Spinner />} Simulate payment (dev) &amp; verify
-              </Button>
+              <div className="space-y-3">
+                <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  Test mode — this server has no real DuitNow merchant QR configured, so the code above can&apos;t be
+                  scanned. Use the button below to simulate a successful payment (no real charge).
+                </p>
+                <Button className="w-full" onClick={verify} disabled={verifying}>
+                  {verifying && <Spinner />} Simulate test payment &amp; verify
+                </Button>
+              </div>
             )}
           </div>
         )}
@@ -398,12 +417,20 @@ export default function SettingsPage() {
                 </p>
               )}
 
+              {payError && (
+                <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{payError}</p>
+              )}
+
               {payMethods.payhalal && (
                 <button
                   onClick={() => startPayment(payMethodFor, "payhalal")}
-                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary"
+                  disabled={!!payStarting}
+                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <p className="font-medium">Online banking, card or e-wallet</p>
+                  <p className="flex items-center gap-2 font-medium">
+                    {payStarting === "payhalal" && <Spinner />}
+                    Online banking, card or e-wallet
+                  </p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     FPX, debit/credit card and e-wallets via PayHalal&apos;s secure payment page. You&apos;ll be
                     redirected to complete the payment, then returned here.
@@ -414,9 +441,13 @@ export default function SettingsPage() {
               {payMethods.duitnow_qr && (
                 <button
                   onClick={() => startPayment(payMethodFor, "duitnow_qr")}
-                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary"
+                  disabled={!!payStarting}
+                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  <p className="font-medium">DuitNow QR</p>
+                  <p className="flex items-center gap-2 font-medium">
+                    {payStarting === "duitnow_qr" && <Spinner />}
+                    DuitNow QR
+                  </p>
                   <p className="mt-1 text-sm text-muted-foreground">
                     Scan a QR with Touch &rsquo;n Go eWallet or any participating banking app. Stay on this page —
                     credits activate automatically once the payment is received.
