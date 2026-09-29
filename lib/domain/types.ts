@@ -227,6 +227,12 @@ export interface PaymentDoc {
   provider: string;
   providerRef: string;
   qrPayload?: string;
+  /** Checkout method the customer chose; defaults to the QR flow when absent. */
+  method?: "duitnow_qr" | "payhalal";
+  /** PayHalal transaction id, captured from the verified server callback. */
+  providerTransactionId?: string;
+  /** PayHalal payment channel, e.g. "FPX" or "CC". */
+  channel?: string;
   /** Package price (sen) — same as amount; customers pay the exact listed price. */
   baseAmount?: number;
   /** Legacy: random cents suffix used before tag-62 reference matching. */

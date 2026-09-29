@@ -48,7 +48,11 @@ export default function SettingsPage() {
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [creditBalance, setCreditBalance] = useState<number>(0);
   const [creditHistory, setCreditHistory] = useState<CreditEntry[] | null>(null);
-  const [paying, setPaying] = useState<{ providerRef: string; qrPayload: string; amountSen: number; plan: string; provider?: string } | null>(null);
+  const [paying, setPaying] = useState<{ providerRef: string; qrPayload?: string; amountSen: number; plan: string; provider?: string; method?: string } | null>(null);
+  const [payMethods, setPayMethods] = useState<{ duitnow_qr: boolean; payhalal: boolean }>({ duitnow_qr: false, payhalal: false });
+  /** Plan the customer picked, while they choose how to pay. */
+  const [payMethodFor, setPayMethodFor] = useState<string | null>(null);
+  const [returnNotice, setReturnNotice] = useState<string | null>(null);
   const [verifying, setVerifying] = useState(false);
   const qrCanvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
@@ -65,19 +69,57 @@ export default function SettingsPage() {
       setPayments(json.data.payments);
       setCreditBalance(json.data.creditBalance);
       setCreditHistory(json.data.creditHistory);
+      if (json.data.paymentMethods) setPayMethods(json.data.paymentMethods);
     }
     setLoaded(true);
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+
+    // Returning from PayHalal's hosted page. Verification is server-side (we ask
+    // PayHalal for the authoritative status) and the signed callback normally
+    // activates the payment within seconds, so poll briefly rather than assume.
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("payment") !== "payhalal") return;
+    const order = params.get("order");
+    setReturnNotice("Confirming your PayHalal payment…");
+    // Drop the query string so a refresh doesn't re-run this.
+    window.history.replaceState({}, "", window.location.pathname);
+
+    let attempts = 0;
+    const timer = setInterval(async () => {
+      attempts++;
+      let verified = false;
+      if (order) {
+        const res = await fetch("/api/payments/verify", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ providerRef: order }),
+        });
+        const json = await res.json();
+        verified = Boolean(json.ok && json.data?.verified);
+      }
+      if (verified) {
+        clearInterval(timer);
+        setReturnNotice("Payment received — your credits and subscription are active.");
+        load();
+      } else if (attempts >= 12) {
+        clearInterval(timer);
+        setReturnNotice("PayHalal is still confirming your payment. Your credits will appear automatically once it completes.");
+        load();
+      }
+    }, 5000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Render the DuitNow QR payload locally (never sent to third-party QR services).
   useEffect(() => {
-    if (!paying || paying.qrPayload.startsWith("{")) return; // mock JSON payload — dev placeholder
+    const payload = paying?.qrPayload;
+    if (!payload || payload.startsWith("{")) return; // mock JSON payload — dev placeholder
     let cancelled = false;
     (async () => {
       const QRCode = (await import("qrcode")).default;
       if (!cancelled && qrCanvasRef.current) {
-        await QRCode.toCanvas(qrCanvasRef.current, paying.qrPayload, { width: 240, margin: 1, errorCorrectionLevel: "M" });
+        await QRCode.toCanvas(qrCanvasRef.current, payload, { width: 240, margin: 1, errorCorrectionLevel: "M" });
       }
     })().catch(() => {});
     return () => { cancelled = true; };
@@ -96,11 +138,20 @@ export default function SettingsPage() {
     return () => clearInterval(t);
   }, [paying]);
 
-  async function subscribe(plan: string) {
+  /** Customer picked a plan: ask how they want to pay (unless only one way works). */
+  function choosePayment(plan: string) {
     setError(null);
+    const available = (["payhalal", "duitnow_qr"] as const).filter((m) => payMethods[m]);
+    if (available.length === 1) { startPayment(plan, available[0]); return; }
+    setPayMethodFor(plan);
+  }
+
+  async function startPayment(plan: string, method: "duitnow_qr" | "payhalal") {
+    setError(null);
+    setPayMethodFor(null);
     const res = await fetch("/api/payments/initiate", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined }),
+      body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method }),
     });
     const json = await res.json();
     if (!json.ok) {
@@ -108,6 +159,8 @@ export default function SettingsPage() {
       if (["NOT_FOUND", "INACTIVE", "EXHAUSTED", "NOT_STARTED", "EXPIRED", "NOT_ELIGIBLE"].includes(json.error?.code)) setCouponApplied(null);
       return;
     }
+    // PayHalal hosts the payment page, so hand the browser over to it.
+    if (json.data.redirectUrl) { window.location.href = json.data.redirectUrl; return; }
     setPaying(json.data);
   }
 
@@ -217,7 +270,7 @@ export default function SettingsPage() {
                 <CardContent>
                   <p className="text-2xl font-bold">{formatMYR(p.price)}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{p.credits.toLocaleString()} credits · 30-day access</p>
-                  <Button className="mt-4 w-full" variant={current ? "outline" : "default"} onClick={() => subscribe(p.key)}>
+                  <Button className="mt-4 w-full" variant={current ? "outline" : "default"} onClick={() => choosePayment(p.key)}>
                     {subscriptionActive ? "Top up" : "Subscribe"}
                   </Button>
                 </CardContent>
@@ -226,6 +279,7 @@ export default function SettingsPage() {
           })}
         </div>
         {error && <p role="alert" className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+        {returnNotice && <p className="mt-4 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{returnNotice}</p>}
       </div>
 
       {/* Credit history */}
@@ -294,12 +348,12 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* TnG QR payment modal */}
-      <Modal open={!!paying} onClose={() => setPaying(null)} title="Pay with Touch 'n Go eWallet">
+      {/* DuitNow QR payment modal */}
+      <Modal open={!!paying} onClose={() => setPaying(null)} title="Scan to pay">
         {paying && (
           <div className="space-y-4">
             <div className="rounded-md bg-muted p-4 text-center">
-              {paying.qrPayload.startsWith("{") ? (
+              {(paying.qrPayload ?? "").startsWith("{") ? (
                 /* Mock provider (dev) — no real QR available */
                 <div className="mx-auto flex h-44 w-44 items-center justify-center rounded-md border-2 border-dashed border-border bg-card p-3">
                   <p className="break-all font-mono text-[9px] text-muted-foreground">{paying.qrPayload}</p>
@@ -311,7 +365,7 @@ export default function SettingsPage() {
                 RM {Math.floor(paying.amountSen / 100)}.{(paying.amountSen % 100).toString().padStart(2, "0")}
                 <span className="ml-2 text-sm font-normal text-muted-foreground capitalize">— {paying.plan} package</span>
               </p>
-              {!paying.qrPayload.startsWith("{") && (
+              {!(paying.qrPayload ?? "").startsWith("{") && (
                 <p className="text-xs text-muted-foreground">
                   Scan with Touch &rsquo;n Go eWallet or any banking app — the <strong>exact</strong> amount and your payment reference are already in the QR, so just confirm and pay.
                 </p>
@@ -327,6 +381,55 @@ export default function SettingsPage() {
             )}
           </div>
         )}
+      </Modal>
+
+      {/* Payment method chooser */}
+      <Modal open={!!payMethodFor} onClose={() => setPayMethodFor(null)} title="How would you like to pay?">
+        {payMethodFor && (() => {
+          const pkg = PACKAGES.find((p) => p.key === payMethodFor);
+          return (
+            <div className="space-y-4">
+              {pkg && (
+                <p className="text-sm text-muted-foreground">
+                  {pkg.name} package · <span className="font-medium text-foreground">{formatMYR(pkg.price)}</span>
+                  {couponApplied && <span className="ml-1">· coupon {couponApplied} applied</span>}
+                </p>
+              )}
+
+              {payMethods.payhalal && (
+                <button
+                  onClick={() => startPayment(payMethodFor, "payhalal")}
+                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary"
+                >
+                  <p className="font-medium">Online banking, card or e-wallet</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    FPX, debit/credit card and e-wallets via PayHalal&apos;s secure payment page. You&apos;ll be
+                    redirected to complete the payment, then returned here.
+                  </p>
+                </button>
+              )}
+
+              {payMethods.duitnow_qr && (
+                <button
+                  onClick={() => startPayment(payMethodFor, "duitnow_qr")}
+                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary"
+                >
+                  <p className="font-medium">DuitNow QR</p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Scan a QR with Touch &rsquo;n Go eWallet or any participating banking app. Stay on this page —
+                    credits activate automatically once the payment is received.
+                  </p>
+                </button>
+              )}
+
+              {!payMethods.payhalal && !payMethods.duitnow_qr && (
+                <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                  No payment method is configured yet. Please contact support.
+                </p>
+              )}
+            </div>
+          );
+        })()}
       </Modal>
     </div>
   );

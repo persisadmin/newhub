@@ -3,6 +3,8 @@ import { getDb, ensureIndexes } from "@/lib/db";
 import { ok, handleError } from "@/lib/api";
 import { requireUser } from "@/lib/auth-helpers";
 import { getCreditBalance, getActiveSubscription, listCreditHistory } from "@/lib/services/credits";
+import { isDuitNowConfigured } from "@/lib/services/duitnow";
+import { getPayHalalConfig, isPayHalalConfigured } from "@/lib/services/payhalal";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +24,12 @@ export async function GET() {
     return ok({
       subscription: subscription ? { ...subscription, _id: String(subscription._id), userId: String(subscription.userId) } : null,
       subscriptionActive: active !== null,
+      /** Which checkout methods the server has credentials for. */
+      paymentMethods: {
+        duitnow_qr: isDuitNowConfigured(),
+        payhalal: isPayHalalConfigured(),
+      },
+      payhalalMode: getPayHalalConfig()?.mode ?? null,
       creditBalance,
       creditHistory: creditHistory.map((c) => ({
         _id: String(c._id), type: c.type, amount: c.amount, reason: c.reason,

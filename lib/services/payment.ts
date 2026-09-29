@@ -8,6 +8,16 @@ import { buildDuitNowPayload } from "@/lib/services/duitnow";
 import { redeemCoupon, discountedPriceSen } from "@/lib/services/coupons";
 import { sendPaymentReceiptEmail } from "@/lib/email";
 import { logger } from "@/lib/logger";
+import { HttpError } from "@/lib/api";
+import {
+  amountMatchesSen,
+  buildPaymentUrl,
+  callbackAppMatches,
+  getPayHalalConfig,
+  reconcileTransaction,
+  verifyCallbackHash,
+  type PayHalalCallback,
+} from "@/lib/services/payhalal";
 import { PACKAGES, type PackageKey } from "@/lib/packages";
 import type { PaymentDoc, SubscriptionDoc } from "@/lib/domain/types";
 
@@ -85,30 +95,77 @@ export function getPaymentProvider(): PaymentProvider {
   return mockTngProvider;
 }
 
-export async function initiatePayment(userId: ObjectId, plan: PlanKey, interval: "monthly" | "yearly" = "monthly", couponCode?: string) {
+/** How the customer pays. DuitNow presents a QR; PayHalal redirects to a hosted page. */
+export type CheckoutMethod = "duitnow_qr" | "payhalal";
+
+export async function initiatePayment(
+  userId: ObjectId,
+  plan: PlanKey,
+  interval: "monthly" | "yearly" = "monthly",
+  couponCode?: string,
+  method: CheckoutMethod = "duitnow_qr"
+) {
   await ensureIndexes();
   const db = await getDb();
   const now = new Date();
 
-  // One pending QR per user: expire any previous unpaid QRs.
+  // One pending payment per user: expire any previous unpaid attempt.
   await db.collection<PaymentDoc>("payments").updateMany(
     { userId, status: { $in: ["qr_presented", "initiated"] } },
     { $set: { status: "expired", updatedAt: now } }
   );
 
   // Coupon: percentage discount (or legacy fixed price) off the package price.
-  // Customers always pay the exact final amount — the QR carries it (tag 54)
-  // plus a unique payment reference (tag 62) for reconciliation.
+  // Customers always pay the exact final amount. The user document also
+  // supplies PayHalal's required customer fields.
+  const userDoc = await db.collection("users").findOne(
+    { _id: userId },
+    { projection: { email: 1, name: 1, phone: 1 } }
+  );
+
   let baseSen: number = PLANS[plan].price;
   let redeemedCode: string | undefined;
   if (couponCode) {
-    const userDoc = await db.collection("users").findOne({ _id: userId }, { projection: { email: 1 } });
     const coupon = await redeemCoupon(couponCode, { plan, email: (userDoc?.email as string) ?? null }); // throws CouponError when invalid
     baseSen = discountedPriceSen(baseSen, coupon);
     redeemedCode = coupon.code;
   }
   const amountSen = baseSen;
 
+  /* ---- PayHalal: hosted redirect checkout (FPX / card / e-wallet) ---- */
+  if (method === "payhalal") {
+    const cfg = getPayHalalConfig();
+    if (!cfg) {
+      throw new HttpError(503, "PayHalal is not available right now. Please choose another payment method.", "PAYHALAL_NOT_CONFIGURED");
+    }
+    // Our order id doubles as PayHalal's order_id and our providerRef.
+    const orderId = `PS${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
+    const redirectUrl = buildPaymentUrl(cfg, {
+      amountSen,
+      productDescription: `PERSIS ${PLANS[plan].name} package`,
+      orderId,
+      customerName: (userDoc?.name as string) || "PERSIS Customer",
+      customerEmail: (userDoc?.email as string) || "",
+      customerPhone: (userDoc?.phone as string) || "",
+    });
+    const inserted = await db.collection<PaymentDoc>("payments").insertOne({
+      userId, plan, interval, amount: amountSen, currency: "MYR",
+      status: "initiated", provider: "payhalal", method: "payhalal",
+      providerRef: orderId, baseAmount: baseSen, couponCode: redeemedCode,
+      createdAt: now, updatedAt: now,
+    } as PaymentDoc);
+    await audit({
+      userId, action: "payment.initiated", entityType: "payment", entityId: inserted.insertedId,
+      newValue: { plan, interval, amountSen, couponCode: redeemedCode, provider: "payhalal", mode: cfg.mode },
+      source: "payment",
+    });
+    return {
+      paymentId: String(inserted.insertedId), providerRef: orderId, redirectUrl,
+      amountSen, provider: "payhalal", method, couponCode: redeemedCode,
+    };
+  }
+
+  /* ---- DuitNow QR: merchant-presented QR scanned in a banking app ---- */
   const provider = getPaymentProvider();
   const created = await provider.createPayment({
     amountSen, plan, interval, userId: String(userId),
@@ -124,12 +181,12 @@ export async function initiatePayment(userId: ObjectId, plan: PlanKey, interval:
 
   const res = await db.collection<PaymentDoc>("payments").insertOne({
     userId, plan, interval, amount: amountSen, currency: "MYR",
-    status: "qr_presented", provider: providerName, providerRef, qrPayload,
+    status: "qr_presented", provider: providerName, method: "duitnow_qr", providerRef, qrPayload,
     baseAmount: baseSen, couponCode: redeemedCode,
     createdAt: now, updatedAt: now,
   } as PaymentDoc);
   await audit({ userId, action: "payment.initiated", entityType: "payment", entityId: res.insertedId, newValue: { plan, interval, amountSen, couponCode: redeemedCode, provider: providerName }, source: "payment" });
-  return { paymentId: String(res.insertedId), providerRef, qrPayload, amountSen, provider: providerName, couponCode: redeemedCode };
+  return { paymentId: String(res.insertedId), providerRef, qrPayload, amountSen, provider: providerName, method: "duitnow_qr" as const, couponCode: redeemedCode };
 }
 
 /** Mark a payment as paid by the wallet (called by webhook or dev simulator). */
@@ -198,16 +255,110 @@ export async function activatePayment(payment: PaymentDoc): Promise<void> {
 export async function verifyAndActivate(providerRef: string): Promise<{ verified: boolean; status: string }> {
   await ensureIndexes();
   const db = await getDb();
-  const provider = getPaymentProvider();
   const payment = await db.collection<PaymentDoc>("payments").findOne({ providerRef });
   if (!payment) return { verified: false, status: "not_found" };
   if (payment.status === "verified") return { verified: true, status: "verified" };
 
+  // PayHalal is verified by asking PayHalal directly about the transaction id
+  // we captured from its signed callback.
+  if (payment.provider === "payhalal") {
+    if (!payment.providerTransactionId) return { verified: false, status: "pending" };
+    const rec = await reconcileTransaction(payment.providerTransactionId);
+    if (rec.status !== "paid") return { verified: false, status: rec.status };
+    if (!amountMatchesSen(rec.amount, payment.amount)) {
+      logger.error("payhalal.amount_mismatch_on_verify", {
+        providerRef, expectedSen: payment.amount, reported: rec.amount,
+      });
+      return { verified: false, status: "amount_mismatch" };
+    }
+    await activatePayment(payment);
+    return { verified: true, status: "verified" };
+  }
+
+  const provider = getPaymentProvider();
   const remote = await provider.fetchStatus(providerRef);
   if (remote !== "paid") return { verified: false, status: remote };
 
   await activatePayment(payment);
   return { verified: true, status: "verified" };
+}
+
+/* ---------------- PayHalal callback ---------------- */
+
+export type PayHalalCallbackOutcome = "ok" | "failed" | "rejected" | "not_found" | "amount_mismatch";
+
+/**
+ * Handle PayHalal's server-to-server notification.
+ *
+ * Trust model: the callback is hash-signed with the app secret, so a valid hash
+ * proves PayHalal sent it. We still cross-check the amount against our own
+ * record before granting anything, and activation itself is idempotent.
+ * `verifyAndActivate` adds a second, independent confirmation (reconciliation)
+ * for customers returning through the redirect URL.
+ */
+export async function handlePayHalalCallback(
+  data: PayHalalCallback
+): Promise<{ outcome: PayHalalCallbackOutcome; message?: string }> {
+  const cfg = getPayHalalConfig();
+  if (!cfg) return { outcome: "rejected", message: "not configured" };
+  if (!callbackAppMatches(cfg, data)) return { outcome: "rejected", message: "app_id mismatch" };
+  if (!verifyCallbackHash(cfg, data)) return { outcome: "rejected", message: "bad hash" };
+
+  const orderId = data.order_id;
+  if (!orderId) return { outcome: "rejected", message: "missing order_id" };
+
+  await ensureIndexes();
+  const db = await getDb();
+
+  // Persist the raw callback for audit/dispute, whatever the outcome.
+  await db.collection("payment_notifications").insertOne({
+    source: "payhalal",
+    providerRef: orderId,
+    transactionId: data.transaction_id ?? null,
+    status: data.status ?? null,
+    channel: data.channel ?? null,
+    amount: data.amount ?? null,
+    raw: data,
+    createdAt: new Date(),
+  }).catch((err) => logger.warn("payhalal.callback_log_failed", { error: String(err) }));
+
+  const payment = await db.collection<PaymentDoc>("payments").findOne({ providerRef: orderId });
+  if (!payment) return { outcome: "not_found", message: "unknown order" };
+
+  // Idempotent: a repeat notification is a success, not a second grant.
+  if (payment.status === "verified") return { outcome: "ok" };
+
+  if (data.status !== "SUCCESS") {
+    await db.collection<PaymentDoc>("payments").updateOne(
+      { _id: payment._id },
+      { $set: { status: "failed", providerTransactionId: data.transaction_id, channel: data.channel, updatedAt: new Date() } }
+    );
+    logger.warn("payhalal.callback_not_success", { providerRef: orderId, status: data.status });
+    return { outcome: "failed", message: data.status };
+  }
+
+  // Never trust the posted amount — compare it with what we charged.
+  if (!amountMatchesSen(data.amount, payment.amount)) {
+    logger.error("payhalal.amount_mismatch", {
+      providerRef: orderId, expectedSen: payment.amount, reported: data.amount,
+    });
+    return { outcome: "amount_mismatch", message: "amount mismatch" };
+  }
+
+  await db.collection<PaymentDoc>("payments").updateOne(
+    { _id: payment._id },
+    { $set: { providerTransactionId: data.transaction_id, channel: data.channel, updatedAt: new Date() } }
+  );
+  await markPaymentPaid(orderId);
+  await activatePayment({
+    ...payment,
+    providerTransactionId: data.transaction_id,
+    channel: data.channel,
+  });
+  logger.info("payhalal.activated", {
+    providerRef: orderId, transactionId: data.transaction_id, channel: data.channel,
+  });
+  return { outcome: "ok" };
 }
 
 /**
