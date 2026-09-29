@@ -364,6 +364,8 @@ export interface PayHalalSelfTest {
     appId: string;
     appIdLength: number;
     secretLength: number;
+    /** Environment marker only, e.g. "secret-testing-…". */
+    secretFormat: string;
     hasAppKey: boolean;
     hasMerchantId: boolean;
     merchantId: string | null;
@@ -378,6 +380,19 @@ export interface PayHalalSelfTest {
 function maskSecretish(value: string): string {
   if (value.length <= 12) return value;
   return `${value.slice(0, 10)}…${value.slice(-4)}`;
+}
+
+/**
+ * Reveal only the environment marker of the secret — e.g. "secret-testing-…" —
+ * never secret material, so a key and secret taken from different PayHalal
+ * apps are obvious at a glance.
+ */
+function secretMarker(secret: string): string {
+  const s = secret.toLowerCase();
+  if (s.startsWith("secret-testing-")) return "secret-testing-…";
+  if (s.startsWith("secret-live-")) return "secret-live-…";
+  if (s.startsWith("secret-")) return "secret-…";
+  return "(no secret- prefix)";
 }
 
 /** Strip HTML so an error page becomes readable text in the admin UI. */
@@ -464,6 +479,7 @@ export async function payHalalSelfTest(amountSen = 1000): Promise<PayHalalSelfTe
       appId: cfg ? maskSecretish(cfg.appId) : "",
       appIdLength: cfg?.appId.length ?? 0,
       secretLength: cfg?.appSecret.length ?? 0,
+      secretFormat: cfg ? secretMarker(cfg.appSecret) : "",
       hasAppKey: !!cfg?.appKey,
       hasMerchantId: !!cfg?.merchantId,
       merchantId: cfg?.merchantId ? maskSecretish(cfg.merchantId) : null,

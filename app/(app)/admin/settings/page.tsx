@@ -367,8 +367,11 @@ export default function AdminLlmSettingsPage() {
                 <span className="break-all font-mono">
                   {phTest.credentials.appId || "—"} · {phTest.credentials.appIdLength} chars
                 </span>
-                <span className="text-muted-foreground">Secret length</span>
-                <span>{phTest.credentials.secretLength} chars</span>
+                <span className="text-muted-foreground">Secret</span>
+                <span>
+                  {phTest.credentials.secretLength} chars
+                  {phTest.credentials.secretFormat ? ` · ${phTest.credentials.secretFormat}` : ""}
+                </span>
                 <span className="text-muted-foreground">App key set</span>
                 <span>{phTest.credentials.hasAppKey ? "yes" : "no"}</span>
                 <span className="text-muted-foreground">Merchant ID</span>
