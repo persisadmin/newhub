@@ -11,7 +11,6 @@ import { logger } from "@/lib/logger";
 import { HttpError } from "@/lib/api";
 import {
   amountMatchesSen,
-  buildPaymentUrl,
   callbackAppMatches,
   getPayHalalConfig,
   reconcileTransaction,
@@ -140,14 +139,9 @@ export async function initiatePayment(
     }
     // Our order id doubles as PayHalal's order_id and our providerRef.
     const orderId = `PS${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
-    const redirectUrl = buildPaymentUrl(cfg, {
-      amountSen,
-      productDescription: `PERSIS ${PLANS[plan].name} package`,
-      orderId,
-      customerName: (userDoc?.name as string) || "PERSIS Customer",
-      customerEmail: (userDoc?.email as string) || "",
-      customerPhone: (userDoc?.phone as string) || "",
-    });
+    // Hand off to our own route, which POSTs the signed form to PayHalal.
+    // PayHalal rejects GET with HTTP 405, so we cannot redirect straight there.
+    const redirectUrl = `/api/payments/payhalal/start?ref=${encodeURIComponent(orderId)}`;
     const inserted = await db.collection<PaymentDoc>("payments").insertOne({
       userId, plan, interval, amount: amountSen, currency: "MYR",
       status: "initiated", provider: "payhalal", method: "payhalal",

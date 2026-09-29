@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowUp, ArrowDown, Plus, Trash2, FlaskConical, Loader2 } from "lucide-react";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Badge, Skeleton } from "@/components/ui";
+import type { PayHalalSelfTest } from "@/lib/services/payhalal";
 
 interface Provider {
   id: string;
@@ -66,6 +67,24 @@ export default function AdminLlmSettingsPage() {
   const [nudgeMsg, setNudgeMsg] = useState<string | null>(null);
   const [duitnow, setDuitnow] = useState<DuitNowPreview | null>(null);
   const duitnowCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [phTest, setPhTest] = useState<PayHalalSelfTest | null>(null);
+  const [phTesting, setPhTesting] = useState(false);
+  const [phError, setPhError] = useState<string | null>(null);
+
+  async function runPayHalalTest() {
+    setPhTesting(true);
+    setPhError(null);
+    try {
+      const res = await fetch("/api/admin/payhalal-test", { method: "POST" });
+      const json = await res.json();
+      if (json.ok) setPhTest(json.data as PayHalalSelfTest);
+      else setPhError(json.error?.message ?? "Self-test failed.");
+    } catch {
+      setPhError("Could not reach the self-test endpoint.");
+    } finally {
+      setPhTesting(false);
+    }
+  }
 
   function toLocalInput(d: string | Date): string {
     const dt = new Date(d);
@@ -307,6 +326,78 @@ export default function AdminLlmSettingsPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">PayHalal Self-Test</CardTitle>
+          <CardDescription>
+            Opens the same RM1.00 payment link we send customers — from the server — and shows PayHalal&apos;s actual
+            reply for <strong>both</strong> hash formats, plus a credential check. No payment is created and nothing is
+            charged. Run this whenever a customer cannot reach the payment page.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Button size="sm" onClick={runPayHalalTest} disabled={phTesting}>
+            {phTesting ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />} Run PayHalal self-test
+          </Button>
+
+          {phError && <p className="text-sm text-destructive">{phError}</p>}
+
+          {phTest && (
+            <div className="space-y-3 text-xs">
+              <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <span className="text-muted-foreground">Configured</span>
+                <span>{phTest.configured ? "yes" : "no"}</span>
+                <span className="text-muted-foreground">Mode</span>
+                <span>{phTest.mode ?? "—"}{phTest.mode === "live" ? " (real money)" : ""}</span>
+                <span className="text-muted-foreground">App ID</span>
+                <span className="break-all font-mono">
+                  {phTest.credentials.appId || "—"} · {phTest.credentials.appIdLength} chars
+                </span>
+                <span className="text-muted-foreground">Secret length</span>
+                <span>{phTest.credentials.secretLength} chars</span>
+                <span className="text-muted-foreground">App key set</span>
+                <span>{phTest.credentials.hasAppKey ? "yes" : "no"}</span>
+                <span className="text-muted-foreground">Merchant ID</span>
+                <span className="break-all font-mono">{phTest.credentials.merchantId ?? "not set"}</span>
+                <span className="text-muted-foreground">Pay endpoint</span>
+                <span className="break-all font-mono">{phTest.payUrl ?? "—"}</span>
+              </div>
+
+              {phTest.attempts.map((a) => (
+                <div key={a.variant} className="rounded-md border border-border p-3">
+                  <p className="flex flex-wrap items-center gap-2 font-medium">
+                    <span
+                      className={`rounded px-2 py-0.5 text-[11px] font-medium ${
+                        a.accepted ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"
+                      }`}
+                    >
+                      {a.accepted ? "accepted" : "rejected"}
+                    </span>
+                    <span className="font-mono text-[11px]">{a.variant}</span>
+                    <span className="text-muted-foreground">HTTP {a.status ?? "n/a"}</span>
+                  </p>
+                  <p className="mt-1 text-muted-foreground">{a.label}</p>
+                  {(a.snippet || a.error) && (
+                    <p className="mt-1 break-words font-mono text-[11px]">{a.error ?? a.snippet}</p>
+                  )}
+                </div>
+              ))}
+
+              {phTest.reconcile.attempted && (
+                <div className="rounded-md border border-border p-3">
+                  <p className="font-medium">Reconciliation credentials — HTTP {phTest.reconcile.status ?? "n/a"}</p>
+                  <p className="mt-1 break-words font-mono text-[11px]">
+                    {phTest.reconcile.error ?? phTest.reconcile.body}
+                  </p>
+                </div>
+              )}
+
+              <p className="rounded-md bg-muted px-3 py-2">{phTest.conclusion}</p>
             </div>
           )}
         </CardContent>
