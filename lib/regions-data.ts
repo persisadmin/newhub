@@ -8,6 +8,8 @@ import type { Kumpulan, RegionAdjustment } from "./regions";
  * resolve in the Docker build. Edit values here; `lib/regions.ts` reads them.
  * Tambahan peratusan kawasan daripada nilai kerja, mengikut jarak dari pejabat JKR Elektrik negeri (pejabat pengeluar inden). Kadar rata (satu peratusan) dikenakan untuk pulau/kawasan khas tanpa mengikut kumpulan.
  */
+export const REGIONS_SOURCE_REF = "JKK Elektrik 2023 - Jadual 1: Peratusan Mengikut Kawasan";
+
 export const KUMPULAN_LABELS_DATA: Record<Kumpulan, string> = {
   "A": "kurang dari 16 km",
   "B": "16-32 km",

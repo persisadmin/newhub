@@ -9,7 +9,7 @@
  *   railway run npx tsx scripts/import-regions.ts   # production
  */
 import { MongoClient } from "mongodb";
-import table from "./data/jkh-elektrik-2023-regions.json";
+import { REGIONS_DATA, REGIONS_SOURCE_REF } from "../lib/regions-data";
 
 async function main() {
   const uri = process.env.MONGODB_URI ?? "mongodb://localhost:27017";
@@ -21,7 +21,7 @@ async function main() {
   await col.createIndex({ state: 1, district: 1 }, { unique: true });
 
   let n = 0;
-  for (const r of table.regions) {
+  for (const r of REGIONS_DATA) {
     await col.updateOne(
       { state: r.state, district: r.district },
       {
@@ -30,7 +30,7 @@ async function main() {
           district: r.district,
           pcts: { A: r.A, B: r.B, C: r.C, D: r.D },
           source: "JKR",
-          sourceRef: table.sourceRef,
+          sourceRef: REGIONS_SOURCE_REF,
           updatedAt: new Date(),
         },
         $setOnInsert: { createdAt: new Date() },
@@ -39,7 +39,7 @@ async function main() {
     );
     n += 1;
   }
-  console.log(`Imported ${n} regional adjustment rows (${table.sourceRef})`);
+  console.log(`Imported ${n} regional adjustment rows (${REGIONS_SOURCE_REF})`);
   await client.close();
 }
 
