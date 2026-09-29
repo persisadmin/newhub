@@ -39,14 +39,26 @@ export interface PayHalalConfig {
 }
 
 /** Configured only when both the app id and secret are present. */
+/**
+ * App keys are prefixed `app-live-…` (production) or `app-testing-…` (UAT);
+ * older keys use a bare `live-…`. Verified against PayHalal's UAT endpoint.
+ */
+function inferModeFromAppKey(appKey: string): PayHalalMode {
+  const key = appKey.toLowerCase();
+  if (key.startsWith("app-live-") || key.startsWith("live-")) return "live";
+  if (key.startsWith("app-testing-") || key.startsWith("testing-")) return "uat";
+  return "uat";
+}
+
 export function getPayHalalConfig(): PayHalalConfig | null {
   const env = getEnv();
+  // NOTE: the `app_id` request parameter is PayHalal's app KEY
+  // (app-live-… / app-testing-…), NOT the dashboard's "App ID" field.
   const appId = env.PAYHALAL_APP_ID?.trim();
   const appSecret = env.PAYHALAL_APP_SECRET?.trim();
   if (!appId || !appSecret) return null;
-  // Explicit PAYHALAL_MODE wins. Otherwise infer it: PayHalal's live app ids
-  // are prefixed "live-"; anything else is sent to the testing endpoints.
-  const mode: PayHalalMode = env.PAYHALAL_MODE ?? (appId.startsWith("live-") ? "live" : "uat");
+  // Explicit PAYHALAL_MODE wins; otherwise infer it from the app key.
+  const mode: PayHalalMode = env.PAYHALAL_MODE ?? inferModeFromAppKey(appId);
   return {
     appId,
     appKey: env.PAYHALAL_APP_KEY?.trim() ?? "",
@@ -358,6 +370,8 @@ export interface PayHalalSelfTest {
   };
   attempts: SelfTestAttempt[];
   reconcile: { attempted: boolean; status: number | null; body: string; error?: string };
+  /** Configuration smells detected before any network call. */
+  warnings: string[];
   conclusion: string;
 }
 
@@ -456,8 +470,25 @@ export async function payHalalSelfTest(amountSen = 1000): Promise<PayHalalSelfTe
     },
     attempts: [],
     reconcile: { attempted: false, status: null, body: "" },
+    warnings: [],
     conclusion: "",
   };
+
+  if (cfg) {
+    // The single most common misconfiguration: using the dashboard's "App ID"
+    // field where the app KEY belongs.
+    if (!cfg.appId.toLowerCase().startsWith("app-")) {
+      result.warnings.push(
+        'PAYHALAL_APP_ID does not look like a PayHalal app KEY (expected prefix "app-", e.g. app-live-… or ' +
+          'app-testing-…). The dashboard\'s "App ID" field is a different value and is rejected as app_id.'
+      );
+    }
+    if (!cfg.appSecret.toLowerCase().startsWith("secret-")) {
+      result.warnings.push(
+        'PAYHALAL_APP_SECRET does not start with "secret-" — check you copied the Secret and not the App Key.'
+      );
+    }
+  }
 
   if (!cfg) {
     result.conclusion =
@@ -513,8 +544,9 @@ export async function payHalalSelfTest(amountSen = 1000): Promise<PayHalalSelfTe
       "PayHalal ACCEPTED the POST form and our plain-concatenation hash. The checkout hand-off is working end to end.";
   } else if (combined.includes("invalid app id") || combined.includes("app_id") || combined.includes("app id")) {
     result.conclusion =
-      `PayHalal does not recognise PAYHALAL_APP_ID (${result.credentials.appId}). Copy the FULL app id from the ` +
-      `dashboard — the page truncates it visually — and update the environment.`;
+      `PayHalal does not recognise app_id ${result.credentials.appId}. This parameter must be the app KEY ` +
+      `(app-live-… or app-testing-…), NOT the dashboard's "App ID" field. Copy the "App Key" value into ` +
+      `PAYHALAL_APP_ID and the "Secret" into PAYHALAL_APP_SECRET.`;
   } else if (combined.includes("hash") || combined.includes("signature")) {
     result.conclusion =
       `PayHalal rejected the SIGNATURE. PAYHALAL_APP_SECRET is most likely not the secret belonging to app id ` +

@@ -349,6 +349,15 @@ export default function AdminLlmSettingsPage() {
 
           {phTest && (
             <div className="space-y-3 text-xs">
+              {phTest.warnings.map((w) => (
+                <p
+                  key={w}
+                  className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-700 dark:text-amber-400"
+                >
+                  {w}
+                </p>
+              ))}
+
               <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
                 <span className="text-muted-foreground">Configured</span>
                 <span>{phTest.configured ? "yes" : "no"}</span>
