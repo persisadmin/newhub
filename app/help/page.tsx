@@ -28,9 +28,8 @@ const sections: LegalSection[] = [
     heading: "Payments",
     body: (
       <>
-        <p><strong>How do I pay?</strong> With Touch &rsquo;n Go eWallet — choose a package in Settings and scan the DuitNow QR shown on screen.</p>
-        <p><strong>How do I pay?</strong> Scan the DuitNow QR shown at checkout with Touch &rsquo;n Go eWallet or any participating banking app — the exact package price and your unique payment reference are already embedded in the QR, so you always pay exactly the listed price. Our system recognises your payment automatically and activates your credits within seconds.</p>
-        <p><strong>I paid but my credits haven&apos;t arrived.</strong> Activation is usually under a minute. If it takes longer, keep the payment receipt in your TNG app and contact us — we can confirm and activate manually from the admin panel right away.</p>
+        <p><strong>How do I pay?</strong> Choose a package in Settings and you&rsquo;ll be taken to our secure payment page, where you can pay by online banking (FPX), debit or credit card, or e-wallet. You always pay exactly the listed package price, and your credits activate automatically within seconds of the payment completing.</p>
+        <p><strong>I paid but my credits haven&apos;t arrived.</strong> Activation is usually under a minute. If it takes longer, keep your payment confirmation and contact us — we can confirm and activate it manually from the admin panel right away.</p>
       </>
     ),
   },

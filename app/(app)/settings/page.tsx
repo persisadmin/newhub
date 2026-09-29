@@ -1,7 +1,7 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Modal, Skeleton, Spinner, StatusBadge } from "@/components/ui";
+import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Skeleton, Spinner, StatusBadge } from "@/components/ui";
 import { formatMYR } from "@/lib/utils";
 import { PACKAGE_LIST, type PackageKey } from "@/lib/packages";
 
@@ -48,15 +48,12 @@ export default function SettingsPage() {
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [creditBalance, setCreditBalance] = useState<number>(0);
   const [creditHistory, setCreditHistory] = useState<CreditEntry[] | null>(null);
-  const [paying, setPaying] = useState<{ providerRef: string; qrPayload?: string; amountSen: number; plan: string; provider?: string; method?: string } | null>(null);
-  const [payMethods, setPayMethods] = useState<{ duitnow_qr: boolean; payhalal: boolean }>({ duitnow_qr: false, payhalal: false });
-  /** Plan the customer picked, while they choose how to pay. */
-  const [payMethodFor, setPayMethodFor] = useState<string | null>(null);
+  /** Online checkout (PayHalal) is the only payment method offered. */
+  const [payMethods, setPayMethods] = useState<{ payhalal: boolean }>({ payhalal: false });
+  /** Plan key whose checkout is currently being started. */
   const [payStarting, setPayStarting] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [returnNotice, setReturnNotice] = useState<string | null>(null);
-  const [verifying, setVerifying] = useState(false);
-  const qrCanvasRef = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [couponInput, setCouponInput] = useState("");
@@ -113,90 +110,39 @@ export default function SettingsPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // Render the DuitNow QR payload locally (never sent to third-party QR services).
-  useEffect(() => {
-    const payload = paying?.qrPayload;
-    if (!payload || payload.startsWith("{")) return; // mock JSON payload — dev placeholder
-    let cancelled = false;
-    (async () => {
-      const QRCode = (await import("qrcode")).default;
-      if (!cancelled && qrCanvasRef.current) {
-        await QRCode.toCanvas(qrCanvasRef.current, payload, { width: 240, margin: 1, errorCorrectionLevel: "M" });
-      }
-    })().catch(() => {});
-    return () => { cancelled = true; };
-  }, [paying]);
-
-  // While the QR is open, poll for activation (phone-notification bridge or webhook).
-  useEffect(() => {
-    if (!paying) return;
-    const t = setInterval(async () => {
-      const res = await fetch("/api/payments/verify", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providerRef: paying.providerRef }),
-      });
-      const json = await res.json();
-      if (json.ok && json.data.verified) { setPaying(null); load(); }
-    }, 5000);
-    return () => clearInterval(t);
-  }, [paying]);
-
-  /** Customer picked a plan: ask how they want to pay (unless only one way works). */
+  /** Customer picked a plan: start the online checkout. */
   function choosePayment(plan: string) {
     setError(null);
     setPayError(null);
-    const available = (["payhalal", "duitnow_qr"] as const).filter((m) => payMethods[m]);
-    // None reported (e.g. still loading): the QR flow always has a provider, so use it.
-    if (available.length === 0) { startPayment(plan, "duitnow_qr"); return; }
-    if (available.length === 1) { startPayment(plan, available[0]); return; }
-    setPayMethodFor(plan);
+    if (loaded && !payMethods.payhalal) {
+      setError("Online payment is temporarily unavailable. Please try again shortly or contact support.");
+      return;
+    }
+    startPayment(plan);
   }
 
-  async function startPayment(plan: string, method: "duitnow_qr" | "payhalal") {
+  async function startPayment(plan: string) {
     setError(null);
     setPayError(null);
-    setPayStarting(method);
+    setPayStarting(plan);
     try {
       const res = await fetch("/api/payments/initiate", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method }),
+        body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method: "payhalal" }),
       });
       const json = await res.json().catch(() => null);
       if (!json?.ok) {
-        // Keep the chooser open so the failure is visible, not a silent dead click.
-        const msg = json?.error?.message ?? "Could not initiate payment. Please try again.";
-        setPayError(msg);
+        setPayError(json?.error?.message ?? "Could not start the payment. Please try again.");
         if (["NOT_FOUND", "INACTIVE", "EXHAUSTED", "NOT_STARTED", "EXPIRED", "NOT_ELIGIBLE"].includes(json?.error?.code)) setCouponApplied(null);
         return;
       }
-      setPayMethodFor(null);
-      // PayHalal hosts the payment page, so hand the browser over to it.
-      if (json.data.redirectUrl) { window.location.href = json.data.redirectUrl; return; }
-      setPaying(json.data);
+      // PayHalal hosts the payment page; our start route POSTs the signed form.
+      if (json.data?.redirectUrl) { window.location.href = json.data.redirectUrl; return; }
+      setPayError("The payment page could not be opened. Please try again.");
     } catch {
       setPayError("Network error — please check your connection and try again.");
     } finally {
       setPayStarting(null);
-    }
-  }
-
-  async function verify() {
-    if (!paying) return;
-    setVerifying(true);
-    // With the mock provider this simulates the wallet scan; with a real gateway the
-    // user scans the QR and the webhook moves the payment forward — Verify re-checks server-side.
-    await fetch("/api/payments/simulate", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providerRef: paying.providerRef }),
-    });
-    const res = await fetch("/api/payments/verify", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providerRef: paying.providerRef }),
-    });
-    const json = await res.json();
-    setVerifying(false);
-    if (json.ok && json.data.verified) {
-      setPaying(null);
-      load();
-    } else {
-      setError("Payment not confirmed yet. If you have paid, wait a moment and verify again.");
     }
   }
 
@@ -285,7 +231,13 @@ export default function SettingsPage() {
                 <CardContent>
                   <p className="text-2xl font-bold">{formatMYR(p.price)}</p>
                   <p className="mt-1 text-sm text-muted-foreground">{p.credits.toLocaleString()} credits · 30-day access</p>
-                  <Button className="mt-4 w-full" variant={current ? "outline" : "default"} onClick={() => choosePayment(p.key)}>
+                  <Button
+                    className="mt-4 w-full"
+                    variant={current ? "outline" : "default"}
+                    disabled={!!payStarting}
+                    onClick={() => choosePayment(p.key)}
+                  >
+                    {payStarting === p.key && <Spinner />}
                     {subscriptionActive ? "Top up" : "Subscribe"}
                   </Button>
                 </CardContent>
@@ -294,6 +246,7 @@ export default function SettingsPage() {
           })}
         </div>
         {error && <p role="alert" className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
+        {payError && <p role="alert" className="mt-4 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{payError}</p>}
         {returnNotice && <p className="mt-4 rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">{returnNotice}</p>}
       </div>
 
@@ -363,107 +316,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* DuitNow QR payment modal */}
-      <Modal open={!!paying} onClose={() => setPaying(null)} title="Scan to pay">
-        {paying && (
-          <div className="space-y-4">
-            <div className="rounded-md bg-muted p-4 text-center">
-              {(paying.qrPayload ?? "").startsWith("{") ? (
-                /* Mock provider (dev) — no real QR available */
-                <div className="mx-auto flex h-44 w-44 items-center justify-center rounded-md border-2 border-dashed border-border bg-card p-3">
-                  <p className="break-all font-mono text-[9px] text-muted-foreground">{paying.qrPayload}</p>
-                </div>
-              ) : (
-                <canvas ref={qrCanvasRef} className="mx-auto rounded-md bg-white p-2" />
-              )}
-              <p className="mt-3 text-lg font-bold tabular-nums">
-                RM {Math.floor(paying.amountSen / 100)}.{(paying.amountSen % 100).toString().padStart(2, "0")}
-                <span className="ml-2 text-sm font-normal text-muted-foreground capitalize">— {paying.plan} package</span>
-              </p>
-              {!(paying.qrPayload ?? "").startsWith("{") && (
-                <p className="text-xs text-muted-foreground">
-                  Scan with Touch &rsquo;n Go eWallet or any banking app — the <strong>exact</strong> amount and your payment reference are already in the QR, so just confirm and pay.
-                </p>
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Credits and subscription activate automatically once your payment is received. This page checks every few seconds.
-            </p>
-            {paying.provider === "tng_mock" && (
-              <div className="space-y-3">
-                <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
-                  Test mode — this server has no real DuitNow merchant QR configured, so the code above can&apos;t be
-                  scanned. Use the button below to simulate a successful payment (no real charge).
-                </p>
-                <Button className="w-full" onClick={verify} disabled={verifying}>
-                  {verifying && <Spinner />} Simulate test payment &amp; verify
-                </Button>
-              </div>
-            )}
-          </div>
-        )}
-      </Modal>
-
-      {/* Payment method chooser */}
-      <Modal open={!!payMethodFor} onClose={() => setPayMethodFor(null)} title="How would you like to pay?">
-        {payMethodFor && (() => {
-          const pkg = PACKAGES.find((p) => p.key === payMethodFor);
-          return (
-            <div className="space-y-4">
-              {pkg && (
-                <p className="text-sm text-muted-foreground">
-                  {pkg.name} package · <span className="font-medium text-foreground">{formatMYR(pkg.price)}</span>
-                  {couponApplied && <span className="ml-1">· coupon {couponApplied} applied</span>}
-                </p>
-              )}
-
-              {payError && (
-                <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{payError}</p>
-              )}
-
-              {payMethods.payhalal && (
-                <button
-                  onClick={() => startPayment(payMethodFor, "payhalal")}
-                  disabled={!!payStarting}
-                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="flex items-center gap-2 font-medium">
-                    {payStarting === "payhalal" && <Spinner />}
-                    Online banking, card or e-wallet
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    FPX, debit/credit card and e-wallets via PayHalal&apos;s secure payment page. You&apos;ll be
-                    redirected to complete the payment, then returned here.
-                  </p>
-                </button>
-              )}
-
-              {payMethods.duitnow_qr && (
-                <button
-                  onClick={() => startPayment(payMethodFor, "duitnow_qr")}
-                  disabled={!!payStarting}
-                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="flex items-center gap-2 font-medium">
-                    {payStarting === "duitnow_qr" && <Spinner />}
-                    DuitNow QR
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Scan a QR with Touch &rsquo;n Go eWallet or any participating banking app. Stay on this page —
-                    credits activate automatically once the payment is received.
-                  </p>
-                </button>
-              )}
-
-              {!payMethods.payhalal && !payMethods.duitnow_qr && (
-                <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  No payment method is configured yet. Please contact support.
-                </p>
-              )}
-            </div>
-          );
-        })()}
-      </Modal>
     </div>
   );
 }

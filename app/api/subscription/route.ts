@@ -3,9 +3,7 @@ import { getDb, ensureIndexes } from "@/lib/db";
 import { ok, handleError } from "@/lib/api";
 import { requireUser } from "@/lib/auth-helpers";
 import { getCreditBalance, getActiveSubscription, listCreditHistory } from "@/lib/services/credits";
-import { isDuitNowConfigured } from "@/lib/services/duitnow";
 import { getPayHalalConfig, isPayHalalConfigured } from "@/lib/services/payhalal";
-import { getEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -25,11 +23,8 @@ export async function GET() {
     return ok({
       subscription: subscription ? { ...subscription, _id: String(subscription._id), userId: String(subscription.userId) } : null,
       subscriptionActive: active !== null,
-      /** Which checkout methods can actually be used right now. */
+      /** Checkout methods available to the customer — online banking only. */
       paymentMethods: {
-        // The QR flow always works: real DuitNow bridge when configured,
-        // otherwise the built-in mock provider (dev/simulation).
-        duitnow_qr: isDuitNowConfigured() || getEnv().TNG_PROVIDER === "mock",
         payhalal: isPayHalalConfigured(),
       },
       payhalalMode: getPayHalalConfig()?.mode ?? null,

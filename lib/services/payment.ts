@@ -135,7 +135,7 @@ export async function initiatePayment(
   if (method === "payhalal") {
     const cfg = getPayHalalConfig();
     if (!cfg) {
-      throw new HttpError(503, "PayHalal is not available right now. Please choose another payment method.", "PAYHALAL_NOT_CONFIGURED");
+      throw new HttpError(503, "Online payment is temporarily unavailable. Please try again shortly or contact support.", "PAYHALAL_NOT_CONFIGURED");
     }
     // Our order id doubles as PayHalal's order_id and our providerRef.
     const orderId = `PS${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
