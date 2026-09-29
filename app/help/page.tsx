@@ -9,7 +9,7 @@ const sections: LegalSection[] = [
       <>
         <p><strong>What does PERSIS do?</strong> Upload a tender document (PDF, DOCX or TXT) and PERSIS extracts the tender details, builds a Bill of Quantities, matches prices against your contractor pricing and benchmark references, flags anything that needs human review, and generates a complete deliverable pack — plus an audio strategy briefing in Bahasa Melayu.</p>
         <p><strong>How do I process my first tender?</strong> Create a project, upload the tender document, then press <em>Process</em>. You&apos;ll see the credit cost estimate before anything is charged. A typical tender takes a few minutes — the progress bar shows each stage live.</p>
-        <p><strong>Can I scan a hard-copy tender?</strong> Yes — on a phone or tablet, use <em>Scan Tender</em>. Photograph the pages in order; PERSIS assembles them into a PDF and runs OCR automatically.</p>
+        <p><strong>Can I scan a hard-copy tender?</strong> Yes — on a phone or tablet, use <em>Scan Tender</em>. Photograph the pages in order (up to 30 per scan; longer documents can be scanned in two batches); PERSIS assembles them into a PDF and runs OCR automatically. Good light and a flat, full-frame page give the best results.</p>
       </>
     ),
   },

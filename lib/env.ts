@@ -34,6 +34,10 @@ const schema = z.object({
   KIMI_PRICING_BATCH_SIZE: z.coerce.number().int().positive().default(20),
   /** Comma-separated emails granted the admin role automatically (OAuth users). */
   ADMIN_EMAILS: z.string().optional(),
+  // Transactional email (Resend). When unset, emails are logged server-side only.
+  RESEND_API_KEY: z.string().optional(),
+  /** Verified sender, e.g. "PERSIS <noreply@persis.my>". Defaults to Resend's onboarding address. */
+  EMAIL_FROM: z.string().optional(),
 });
 
 export type Env = z.infer<typeof schema>;

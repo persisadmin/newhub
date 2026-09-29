@@ -33,6 +33,7 @@ interface Coupon {
   maxUses: number | null; usedCount: number; active: boolean; note: string | null; createdAt: string;
 }
 interface Promo { enabled: boolean; startsAt: string; endsAt: string; trialDays: number; credits: number }
+interface TrialNudge { enabled: boolean; discountPct: number; couponHours: number }
 interface DuitNowPreview { configured: boolean; previewPayload: string | null; fields: [string, string][] }
 
 export default function AdminLlmSettingsPage() {
@@ -60,6 +61,9 @@ export default function AdminLlmSettingsPage() {
   const [promo, setPromo] = useState<Promo | null>(null);
   const [promoBusy, setPromoBusy] = useState(false);
   const [promoMsg, setPromoMsg] = useState<string | null>(null);
+  const [trialNudge, setTrialNudge] = useState<TrialNudge | null>(null);
+  const [nudgeBusy, setNudgeBusy] = useState(false);
+  const [nudgeMsg, setNudgeMsg] = useState<string | null>(null);
   const [duitnow, setDuitnow] = useState<DuitNowPreview | null>(null);
   const duitnowCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -79,6 +83,18 @@ export default function AdminLlmSettingsPage() {
     const json = await res.json();
     setPromoBusy(false);
     setPromoMsg(json.ok ? "Promotion saved. New sign-ups in the window get the trial automatically." : json.error?.message ?? "Save failed.");
+  }
+
+  async function saveTrialNudge() {
+    if (!trialNudge) return;
+    setNudgeBusy(true); setNudgeMsg(null);
+    const res = await fetch("/api/admin/settings", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ providers, features, billing, trialNudge }),
+    });
+    const json = await res.json();
+    setNudgeBusy(false);
+    setNudgeMsg(json.ok ? "Trial nudge saved. The hourly sweep uses the new values from its next run." : json.error?.message ?? "Save failed.");
   }
 
   async function toggleMaintenance() {
@@ -157,6 +173,8 @@ export default function AdminLlmSettingsPage() {
         setPromo(p
           ? { enabled: p.enabled, startsAt: toLocalInput(p.startsAt), endsAt: toLocalInput(p.endsAt), trialDays: p.trialDays, credits: p.credits }
           : { enabled: false, startsAt: toLocalInput(new Date()), endsAt: toLocalInput(new Date(Date.now() + 14 * 864e5)), trialDays: 14, credits: 100 });
+        const tn = json.data.trialNudge;
+        setTrialNudge(tn ?? { enabled: true, discountPct: 15, couponHours: 24 });
       }
       loadPayments();
       loadCoupons();
@@ -469,6 +487,43 @@ export default function AdminLlmSettingsPage() {
             </div>
             <p className="text-xs text-muted-foreground">
               Applies to accounts created after saving, within the window only. Existing users are unaffected. A banner appears on the landing page while the promo is live.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {trialNudge && (
+        <Card className={trialNudge.enabled ? "border-success" : undefined}>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0">
+            <div>
+              <CardTitle className="text-base">Trial-Expiry Nudge</CardTitle>
+              <CardDescription>24h before a free trial ends, email the user a one-time discount coupon for any paid package.</CardDescription>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={trialNudge.enabled} onChange={(e) => setTrialNudge({ ...trialNudge, enabled: e.target.checked })} />
+              Enabled
+            </label>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-6">
+              <div className="space-y-1">
+                <Label className="text-xs">Discount (%)</Label>
+                <Input type="number" min={1} max={99} className="w-28" value={trialNudge.discountPct} onChange={(e) => setTrialNudge({ ...trialNudge, discountPct: Number(e.target.value) })} />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">Coupon valid (hours)</Label>
+                <Input type="number" min={1} max={720} className="w-28" value={trialNudge.couponHours} onChange={(e) => setTrialNudge({ ...trialNudge, couponHours: Number(e.target.value) })} />
+              </div>
+            </div>
+            <div className="flex items-center gap-4">
+              <Button size="sm" onClick={saveTrialNudge} disabled={nudgeBusy}>
+                {nudgeBusy ? <Loader2 size={12} className="animate-spin" /> : null} Save nudge
+              </Button>
+              {nudgeMsg && <span className="text-sm text-muted-foreground">{nudgeMsg}</span>}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              An hourly sweep finds trials expiring within 24 hours and emails each user once. The generated coupon
+              (single-use, tied to that user&apos;s email) appears in the Coupons list below and is deleted automatically when it expires.
             </p>
           </CardContent>
         </Card>

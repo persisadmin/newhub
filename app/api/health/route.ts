@@ -1,7 +1,13 @@
 import { getDb } from "@/lib/db";
 import { ok } from "@/lib/api";
+import { startTrialNudgeScheduler } from "@/lib/services/trial-nudges";
 
 export const dynamic = "force-dynamic";
+
+// This route is Node-bundled (it imports mongodb), so it's a reliable place to
+// boot the in-process scheduler. startTrialNudgeScheduler() is idempotent, so
+// repeated health hits are cheap no-ops after the first.
+startTrialNudgeScheduler();
 
 export async function GET() {
   let db = "down";

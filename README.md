@@ -34,6 +34,23 @@ Swappable seams (per spec §17): pricing strategies (`lib/domain/pricing/hybrid.
 benchmark providers (`benchmark_prices` collection), payment provider (`lib/services/payment.ts`),
 document extraction (`lib/services/extraction.ts`).
 
+## Landing pages
+
+The marketing page at `/` is admin-switchable between several **variants**. Each variant is a
+code-defined component, registered in `components/landing/registry.ts`. An admin picks the live
+one under **Admin → Landing Pages**; the choice is stored in the `settings` collection (id
+`landing`) and audited.
+
+- `/` renders the active variant (`force-dynamic`, so switching needs no redeploy).
+- `/lp/<slug>` serves any variant directly — for ad campaigns, and for previewing a variant before
+  activating it. These pages are `noindex` so they don't compete with `/` in search.
+
+**Adding a variant:** create `components/landing/variants/<name>.tsx` (compose the blocks from
+`components/landing/sections.tsx`, wrap in `LandingShell`), import it in `registry.ts` and add an
+entry with a `slug`, `name`, `description`, `<title>`, meta description and `Component`. Deploy,
+and it appears in the admin switcher. Package prices on landing pages come from `lib/packages.ts`
+— the same source the billing service and settings page use, so they cannot drift.
+
 ## Setup
 
 ```bash
@@ -55,6 +72,8 @@ npm run dev                  # http://localhost:3000
 | `PRICE_MATCH_CONFIDENCE_THRESHOLD` | Low-confidence flag threshold (default 0.6) |
 | `PRICE_HYBRID_STRATEGY` | `weighted_average` or `benchmark_anchored` |
 | `TNG_MOCK_AUTO_VERIFY` | Dev convenience for mock payment verification |
+| `RESEND_API_KEY` | Transactional email (password reset, receipts, welcome). Without it, emails are logged server-side only |
+| `EMAIL_FROM` | Verified sender, e.g. `PERSIS <noreply@persis.my>` (defaults to Resend onboarding address for testing) |
 
 ### Demo credentials (after seeding)
 

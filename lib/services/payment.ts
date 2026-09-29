@@ -6,20 +6,21 @@ import { audit } from "@/lib/audit";
 import { grantCredits } from "@/lib/services/credits";
 import { buildDuitNowPayload } from "@/lib/services/duitnow";
 import { redeemCoupon, discountedPriceSen } from "@/lib/services/coupons";
+import { sendPaymentReceiptEmail } from "@/lib/email";
+import { logger } from "@/lib/logger";
+import { PACKAGES, type PackageKey } from "@/lib/packages";
 import type { PaymentDoc, SubscriptionDoc } from "@/lib/domain/types";
 
 /**
- * Credit packages. Each purchase grants the listed credits (1 credit = RM 1,
- * credits never expire) and activates a 30-day subscription — uploads and
- * scanning require an active subscription. Prices in sen.
+ * Credit packages — re-exported from lib/packages.ts, the single source of
+ * truth shared with the settings page and landing pages. Each purchase grants
+ * the listed credits (1 credit = RM 1, credits never expire) and activates a
+ * 30-day subscription — uploads and scanning require an active subscription.
+ * Prices in sen.
  */
-export const PLANS = {
-  starter: { name: "Starter", price: 29900, credits: 1000 },
-  professional: { name: "Professional", price: 49900, credits: 5000 },
-  enterprise: { name: "Enterprise", price: 99900, credits: 20000 },
-} as const;
+export const PLANS = PACKAGES;
 
-export type PlanKey = keyof typeof PLANS;
+export type PlanKey = PackageKey;
 
 export interface PaymentProvider {
   name: string;
@@ -176,6 +177,21 @@ export async function activatePayment(payment: PaymentDoc): Promise<void> {
   }
   await audit({ userId: payment.userId, action: "payment.verified", entityType: "payment", entityId: payment._id, newValue: { providerRef: payment.providerRef }, source: "payment" });
   await audit({ userId: payment.userId, action: "subscription.activated", entityType: "subscription", entityId: payment.userId, newValue: { plan: payment.plan, interval: payment.interval }, source: "payment" });
+
+  // Receipt email — best-effort; failure must not roll back activation.
+  try {
+    const userDoc = await db.collection("users").findOne({ _id: payment.userId }, { projection: { email: 1 } });
+    if (userDoc?.email) {
+      await sendPaymentReceiptEmail(userDoc.email as string, {
+        planName: PLANS[planKey]?.name ?? payment.plan,
+        amountMyr: (payment.amount / 100).toFixed(2),
+        credits,
+        providerRef: payment.providerRef,
+      });
+    }
+  } catch (err) {
+    logger.error("payment.receipt_email_failed", { paymentId: String(payment._id), error: String(err) });
+  }
 }
 
 /** Server-side verification + subscription activation. Never trust the client. */

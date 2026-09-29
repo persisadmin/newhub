@@ -1,6 +1,6 @@
 "use client";
 import { use, useCallback, useEffect, useRef, useState } from "react";
-import { UploadCloud, Play, Square, FileText, CheckCircle2, Circle, Loader2, Flag, Download } from "lucide-react";
+import { UploadCloud, Play, Square, FileText, CheckCircle2, Circle, Loader2, Flag, Download, Eye } from "lucide-react";
 import { Button, Card, CardContent, CardHeader, CardTitle, CardDescription, Badge, StatusBadge, Skeleton, Modal, Input, Label, EmptyState } from "@/components/ui";
 import { formatPrice } from "@/lib/utils";
 import { ScanButton } from "@/components/scan-button";
@@ -22,6 +22,7 @@ interface ProjectData {
     _id: string; name: string; status: string; currentStage?: string; processingError?: string;
     tenderTitle?: string; tenderNumber?: string; tenderAgency?: string; tenderCategory?: string; closingDate?: string;
     regionState?: string; regionDistrict?: string; regionKumpulan?: string;
+    profitMarginPct?: number | null;
     strategyNarrative?: string; strategyNarrativeAt?: string; strategyAudioParts?: number;
   };
   documents: Doc[];
@@ -314,6 +315,12 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
       {tab === "boq" && <BoqTable items={data.boqItems} />}
       {tab === "pricing" && (
         <div className="space-y-3">
+          <MarginBar
+            projectId={id}
+            marginPct={data.project.profitMarginPct}
+            pricing={pricing}
+            onSaved={(pct) => setData((d) => d ? { ...d, project: { ...d.project, profitMarginPct: pct } } : d)}
+          />
           {pricing && pricing.length > 0 && (
             <div className="flex justify-end">
               <a href={`/api/projects/${id}/pricing/export`} download>
@@ -321,10 +328,10 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
               </a>
             </div>
           )}
-          <PricingTable pricing={pricing} onOverride={setOverrideTarget} />
+          <PricingTable pricing={pricing} marginPct={data.project.profitMarginPct} onOverride={setOverrideTarget} />
         </div>
       )}
-      {tab === "review" && <PricingTable pricing={flagged} onOverride={setOverrideTarget} reviewMode />}
+      {tab === "review" && <PricingTable pricing={flagged} marginPct={data.project.profitMarginPct} onOverride={setOverrideTarget} reviewMode />}
       {tab === "history" && <JobHistory jobs={data.jobs} />}
 
       <OverrideModal
@@ -445,16 +452,118 @@ function BoqTable({ items }: { items: BoqItem[] }) {
   );
 }
 
-function PricingTable({ pricing, onOverride, reviewMode = false }: { pricing: PricingRecord[] | null; onOverride: (r: PricingRecord) => void; reviewMode?: boolean }) {
+/** Profit margin editor + live totals: cost → margin → tender price. */
+function MarginBar({ projectId, marginPct, pricing, onSaved }: {
+  projectId: string;
+  marginPct: number | null | undefined;
+  pricing: PricingRecord[] | null;
+  onSaved: (pct: number | null) => void;
+}) {
+  const [value, setValue] = useState(marginPct != null ? String(marginPct) : "");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  // Keep the input in sync if the project reloads with a different value.
+  useEffect(() => { setValue(marginPct != null ? String(marginPct) : ""); }, [marginPct]);
+
+  const parsed = value.trim() === "" ? null : Number(value);
+  const valid = parsed === null || (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100);
+
+  async function save(pct: number | null) {
+    setSaving(true);
+    setSaveError(null);
+    const res = await fetch(`/api/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ profitMarginPct: pct }),
+    });
+    const json = await res.json();
+    setSaving(false);
+    if (!json.ok) { setSaveError(json.error?.message ?? "Could not save margin."); return; }
+    onSaved(pct);
+  }
+
+  const cost = (pricing ?? []).reduce((s, p) => s + (p.selectedPrice ?? 0) * (p.quantity ?? 1), 0);
+  const marginAmount = parsed != null && valid ? (cost * parsed) / 100 : 0;
+  const tender = cost + marginAmount;
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <div className="flex items-center gap-2">
+          <Label htmlFor="profit-margin" className="whitespace-nowrap text-sm font-medium">Profit margin</Label>
+          <div className="relative">
+            <Input
+              id="profit-margin"
+              type="number"
+              min={0}
+              max={100}
+              step={0.5}
+              placeholder="0"
+              value={value}
+              onChange={(e) => setValue(e.target.value)}
+              onBlur={() => { if (valid && parsed !== (marginPct ?? null)) save(parsed); }}
+              className="w-24 pr-7 text-right"
+            />
+            <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted-foreground">%</span>
+          </div>
+          {saving && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
+        </div>
+        <div className="flex gap-1.5">
+          {[5, 10, 15, 20].map((p) => (
+            <button
+              key={p}
+              onClick={() => { setValue(String(p)); save(p); }}
+              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${parsed === p ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+            >
+              {p}%
+            </button>
+          ))}
+          {parsed != null && (
+            <button
+              onClick={() => { setValue(""); save(null); }}
+              className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        {pricing && pricing.length > 0 && (
+          <div className="ml-auto flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
+            <span className="text-muted-foreground">Cost <span className="font-medium text-foreground">{formatPrice(Math.round(cost * 100) / 100)}</span></span>
+            {parsed != null && valid && (
+              <>
+                <span className="text-muted-foreground">+ Margin {parsed}% <span className="font-medium text-foreground">{formatPrice(Math.round(marginAmount * 100) / 100)}</span></span>
+                <span className="text-base font-semibold">Tender {formatPrice(Math.round(tender * 100) / 100)}</span>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {saveError && <p role="alert" className="mt-2 text-sm text-destructive">{saveError}</p>}
+      {!valid && <p role="alert" className="mt-2 text-sm text-destructive">Margin must be between 0 and 100%.</p>}
+      <p className="mt-2 text-xs text-muted-foreground">
+        Markup on cost: tender price = selected cost price × (1 + margin%). 10% markup ≈ 9.1% margin on selling price.
+      </p>
+    </div>
+  );
+}
+
+function PricingTable({ pricing, marginPct = null, onOverride, reviewMode = false }: { pricing: PricingRecord[] | null; marginPct?: number | null; onOverride: (r: PricingRecord) => void; reviewMode?: boolean }) {
   if (pricing === null) return <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>;
   if (pricing.length === 0) {
     return <EmptyState title={reviewMode ? "Nothing to review" : "No pricing yet"} description={reviewMode ? "All pricing records are clear of review flags." : "Process a tender document to generate pricing."} />;
   }
   const total = pricing.reduce((s, p) => s + (p.selectedPrice ?? 0) * (p.quantity ?? 1), 0);
+  const uplift = marginPct != null ? 1 + marginPct / 100 : null;
+  const tenderTotal = uplift != null ? total * uplift : null;
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <p className="text-sm text-muted-foreground">Estimated total (selected prices): <span className="font-semibold text-foreground">{formatPrice(Math.round(total * 100) / 100)}</span></p>
+      <div className="flex justify-end gap-4 text-sm">
+        <p className="text-muted-foreground">Cost total: <span className="font-semibold text-foreground">{formatPrice(Math.round(total * 100) / 100)}</span></p>
+        {tenderTotal != null && (
+          <p className="text-muted-foreground">Tender total (incl. {marginPct}% margin): <span className="font-semibold text-foreground">{formatPrice(Math.round(tenderTotal * 100) / 100)}</span></p>
+        )}
       </div>
       <div className="overflow-x-auto rounded-lg border border-border pb-1">
         <table className="w-full min-w-[1000px] text-sm">
@@ -466,7 +575,8 @@ function PricingTable({ pricing, onOverride, reviewMode = false }: { pricing: Pr
               <th className="px-3 py-3 font-medium text-right">Contractor</th>
               <th className="px-3 py-3 font-medium text-right">Benchmark</th>
               <th className="px-3 py-3 font-medium text-right">Hybrid</th>
-              <th className="px-3 py-3 font-medium text-right">Selected</th>
+              <th className="px-3 py-3 font-medium text-right">Cost</th>
+              {uplift != null && <th className="px-3 py-3 font-medium text-right">Tender</th>}
               <th className="px-3 py-3 font-medium">Source</th>
               <th className="px-3 py-3 font-medium">Conf.</th>
               <th className="px-3 py-3 font-medium">Flag</th>
@@ -486,6 +596,11 @@ function PricingTable({ pricing, onOverride, reviewMode = false }: { pricing: Pr
                 <td className="px-3 py-3 text-right">{formatPrice(p.benchmarkPrice)}</td>
                 <td className="px-3 py-3 text-right">{formatPrice(p.hybridPrice)}</td>
                 <td className="px-3 py-3 text-right font-semibold">{formatPrice(p.selectedPrice)}</td>
+                {uplift != null && (
+                  <td className="px-3 py-3 text-right font-semibold text-primary">
+                    {p.selectedPrice != null ? formatPrice(Math.round(p.selectedPrice * uplift * 100) / 100) : "—"}
+                  </td>
+                )}
                 <td className="px-3 py-3">{p.selectedPriceSource ? <Badge variant="secondary">{p.selectedPriceSource}</Badge> : "—"}</td>
                 <td className="px-3 py-3">{p.matchConfidence != null ? `${Math.round(p.matchConfidence * 100)}%` : "—"}</td>
                 <td className="px-3 py-3">
@@ -591,8 +706,90 @@ function JobHistory({ jobs }: { jobs: ProjectData["jobs"] }) {
 /* ---------- generated deliverables ---------- */
 interface GeneratedDoc { _id: string; type: string; title: string; filename: string; contentType: string; size: number; createdAt: string; }
 
+/* ---------- deliverable preview ---------- */
+interface XlsxCell { v: string; bold?: boolean; numFmt?: string }
+interface XlsxRow { cells: XlsxCell[]; isHeader?: boolean; isSection?: boolean }
+type PreviewData =
+  | { kind: "xlsx"; title: string; filename: string; sheetName: string; columns: number; colWidths: number[]; rows: XlsxRow[]; truncated: boolean }
+  | { kind: "docx"; title: string; filename: string; html: string }
+  | { kind: "pdf"; title: string; filename: string };
+
+function DeliverablePreview({ projectId, doc, onClose }: { projectId: string; doc: GeneratedDoc; onClose: () => void }) {
+  const [data, setData] = useState<PreviewData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setData(null); setError(null);
+    fetch(`/api/projects/${projectId}/documents/${doc._id}/preview`)
+      .then((r) => r.json())
+      .then((j) => { if (j.ok) setData(j.data as PreviewData); else setError(j.error?.message ?? "Preview unavailable."); })
+      .catch(() => setError("Preview unavailable."));
+  }, [projectId, doc._id]);
+
+  const downloadUrl = `/api/projects/${projectId}/documents/${doc._id}/download`;
+
+  return (
+    <Modal open onClose={onClose} title={doc.title} className="max-w-5xl">
+      <div className="max-h-[75dvh] overflow-auto">
+        {error ? (
+          <div className="flex flex-col items-center gap-3 py-8 text-center">
+            <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>
+            <a href={downloadUrl} download={doc.filename}><Button size="sm" variant="outline"><Download size={12} /> Download instead</Button></a>
+          </div>
+        ) : !data ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin" /> Loading preview…</div>
+        ) : data.kind === "pdf" ? (
+          <iframe src={downloadUrl} title={data.title} className="h-[70dvh] w-full rounded-md border border-border bg-white" />
+        ) : data.kind === "docx" ? (
+          <div
+            className="prose prose-sm max-w-none rounded-md border border-border bg-background p-4 text-foreground [&_h1]:text-lg [&_h2]:text-base [&_table]:w-full [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 [&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1"
+            dangerouslySetInnerHTML={{ __html: data.html }}
+          />
+        ) : (
+          <XlsxTable data={data} />
+        )}
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-2 border-t border-border pt-4">
+        <p className="text-xs text-muted-foreground">
+          {data?.kind === "xlsx" ? `Sheet: ${data.sheetName}${data.truncated ? " · showing first 300 rows" : ""}` : data?.filename ?? doc.filename}
+        </p>
+        <a href={downloadUrl} download={doc.filename}><Button size="sm" variant="outline"><Download size={12} /> Download</Button></a>
+      </div>
+    </Modal>
+  );
+}
+
+function XlsxTable({ data }: { data: Extract<PreviewData, { kind: "xlsx" }> }) {
+  if (data.rows.length === 0) return <EmptyState title="Empty sheet" description="This spreadsheet has no visible rows." />;
+  return (
+    <div className="overflow-x-auto rounded-md border border-border">
+      <table className="w-full border-collapse text-xs">
+        <tbody>
+          {data.rows.map((row, ri) => (
+            <tr key={ri} className={row.isHeader ? "bg-primary/10 font-semibold" : row.isSection ? "bg-muted font-semibold" : ri % 2 ? "bg-muted/30" : undefined}>
+              {Array.from({ length: data.columns }, (_, ci) => {
+                const cell = row.cells[ci];
+                return (
+                  <td
+                    key={ci}
+                    className={`border-b border-border px-2 py-1.5 align-top ${cell?.bold ? "font-semibold" : ""} ${cell?.numFmt?.includes("#") ? "text-right tabular-nums" : ""}`}
+                    style={{ minWidth: data.colWidths[ci] ? Math.min(200, data.colWidths[ci] * 7) : undefined }}
+                  >
+                    {cell?.v ?? ""}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function GeneratedDocs({ projectId, refreshKey, running }: { projectId: string; refreshKey?: string | null; running: boolean }) {
   const [docs, setDocs] = useState<GeneratedDoc[] | null>(null);
+  const [previewing, setPreviewing] = useState<GeneratedDoc | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/projects/${projectId}/documents`);
@@ -629,14 +826,18 @@ function GeneratedDocs({ projectId, refreshKey, running }: { projectId: string; 
                   <span className="truncate">{d.title}</span>
                   <span className="text-xs text-muted-foreground">({(d.size / 1024).toFixed(0)} KB)</span>
                 </span>
-                <a href={`/api/projects/${projectId}/documents/${d._id}/download`} download={d.filename}>
-                  <Button size="sm" variant="outline"><Download size={12} /> Download</Button>
-                </a>
+                <span className="flex shrink-0 gap-2">
+                  <Button size="sm" variant="outline" onClick={() => setPreviewing(d)}><Eye size={12} /> Preview</Button>
+                  <a href={`/api/projects/${projectId}/documents/${d._id}/download`} download={d.filename}>
+                    <Button size="sm" variant="outline"><Download size={12} /> Download</Button>
+                  </a>
+                </span>
               </li>
             ))}
           </ul>
         )}
       </CardContent>
+      {previewing && <DeliverablePreview projectId={projectId} doc={previewing} onClose={() => setPreviewing(null)} />}
     </Card>
   );
 }

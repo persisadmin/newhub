@@ -5,6 +5,7 @@ import { getLlmSettings, saveLlmSettings } from "@/lib/services/llm/settings";
 import { getBillingSettings, saveBillingSettings } from "@/lib/services/credits";
 import { isMaintenanceMode, setMaintenanceMode } from "@/lib/services/maintenance";
 import { getPromo, savePromo } from "@/lib/services/promo";
+import { getTrialNudgeSettings, saveTrialNudgeSettings } from "@/lib/services/trial-nudges";
 import { getDuitNowPreview } from "@/lib/services/duitnow";
 import { audit } from "@/lib/audit";
 
@@ -55,6 +56,13 @@ const settingsSchema = z.object({
       credits: z.coerce.number().min(0).max(1000000),
     })
     .optional(),
+  trialNudge: z
+    .object({
+      enabled: z.boolean(),
+      discountPct: z.coerce.number().int().min(1).max(99),
+      couponHours: z.coerce.number().int().min(1).max(720),
+    })
+    .optional(),
 });
 
 /** GET /api/admin/settings — current LLM chain + feature flags. Keys are masked. */
@@ -66,9 +74,11 @@ export async function GET() {
     const billing = await getBillingSettings();
     const maintenance = await isMaintenanceMode();
     const promo = await getPromo();
+    const trialNudge = await getTrialNudgeSettings();
     return ok({
       maintenance,
       promo,
+      trialNudge,
       duitnow: getDuitNowPreview(),
       settings: {
         ...settings,
@@ -111,6 +121,9 @@ export async function PUT(req: Request) {
     }
     if (parsed.data.promo) {
       await savePromo(parsed.data.promo, new (await import("mongodb")).ObjectId(user.id));
+    }
+    if (parsed.data.trialNudge) {
+      await saveTrialNudgeSettings(parsed.data.trialNudge, new (await import("mongodb")).ObjectId(user.id));
     }
     await audit({
       userId: new (await import("mongodb")).ObjectId(user.id),

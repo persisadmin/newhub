@@ -25,7 +25,7 @@ export async function GET() {
       _id: String(r._id),
       itemId: String(r.itemId),
       projectId: String(r.projectId),
-      project: { _id: String(r.project._id), name: r.project.name },
+      project: { _id: String(r.project._id), name: r.project.name, profitMarginPct: (r.project.profitMarginPct as number | null | undefined) ?? null },
     })));
   } catch (err) {
     return handleError(err);

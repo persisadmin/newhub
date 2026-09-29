@@ -8,7 +8,7 @@ import { formatPrice } from "@/lib/utils";
 interface FlaggedRecord {
   _id: string;
   projectId: string;
-  project: { _id: string; name: string };
+  project: { _id: string; name: string; profitMarginPct: number | null };
   description: string;
   quantity: number | null;
   unit: string | null;
@@ -167,6 +167,9 @@ export default function PricingReviewPage() {
                   <p>Benchmark: <span className="font-medium">{formatPrice(r.benchmarkPrice)}</span></p>
                   <p>Hybrid: <span className="font-medium">{formatPrice(r.hybridPrice)}</span></p>
                   <p className="mt-1 font-semibold">Selected: {formatPrice(r.selectedPrice)} {r.selectedPriceSource && <span className="text-xs font-normal text-muted-foreground">({r.selectedPriceSource})</span>}</p>
+                  {r.project.profitMarginPct != null && r.selectedPrice != null && (
+                    <p className="text-primary">Tender: {formatPrice(Math.round(r.selectedPrice * (1 + r.project.profitMarginPct / 100) * 100) / 100)} <span className="text-xs font-normal text-muted-foreground">(incl. {r.project.profitMarginPct}% margin)</span></p>
+                  )}
                 </div>
               </div>
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-md bg-muted/50 p-3">

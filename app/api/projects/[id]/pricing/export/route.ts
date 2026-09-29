@@ -44,13 +44,14 @@ export async function GET(_req: Request, ctx: Ctx) {
       };
     });
 
-    const built = await buildPricedBoqXlsx(rows, project.tenderTitle || project.name);
+    const marginPct = (project.profitMarginPct as number | null | undefined) ?? null;
+    const built = await buildPricedBoqXlsx(rows, project.tenderTitle || project.name, marginPct);
     await audit({
       userId: new ObjectId(user.id),
       action: "pricing.exported",
       entityType: "project",
       entityId: project._id,
-      newValue: { rows: rows.length, filename: built.filename },
+      newValue: { rows: rows.length, filename: built.filename, profitMarginPct: marginPct },
       source: "api",
     });
 

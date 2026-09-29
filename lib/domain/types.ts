@@ -35,6 +35,9 @@ export interface ProjectDoc {
   regionState?: string;
   regionDistrict?: string;
   regionKumpulan?: "A" | "B" | "C" | "D";
+  /** Profit markup (%) applied on top of selected cost prices at read time.
+   *  Tender price = selectedPrice × (1 + pct/100). Undefined/null = no uplift. */
+  profitMarginPct?: number | null;
   currentStage?: PipelineStage;
   stageUpdatedAt?: Date;
   processingError?: string;

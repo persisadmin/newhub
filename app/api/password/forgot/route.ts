@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
 import { z } from "zod";
 import { getDb, ensureIndexes } from "@/lib/db";
+import { getEnv } from "@/lib/env";
 import { ok, handleError, getIp } from "@/lib/api";
 import { rateLimit } from "@/lib/rate-limit";
+import { sendPasswordResetEmail } from "@/lib/email";
 
 const schema = z.object({ email: z.string().email() });
 
@@ -23,8 +25,8 @@ export async function POST(req: Request) {
         tokenHash,
         expiresAt: new Date(Date.now() + 60 * 60 * 1000),
       });
-      // In production, email this link. In dev it is logged server-side only.
-      console.log(`[persis] Password reset link: /reset-password?token=${token}`);
+      const resetUrl = `${getEnv().NEXTAUTH_URL}/reset-password?token=${token}`;
+      await sendPasswordResetEmail(user.email as string, resetUrl);
     }
     return ok({});
   } catch (err) {

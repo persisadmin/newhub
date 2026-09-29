@@ -53,6 +53,11 @@ export async function ensureIndexes(): Promise<void> {
     // unique index (no-op once dropped) and keep a plain lookup index.
     db.collection("coupons").dropIndex("code_1").catch(() => {}),
     db.collection("coupons").createIndex({ code: 1, createdAt: -1 }),
+    // Expired coupons are physically removed by Mongo's TTL reaper, so the
+    // admin coupon list never shows dead offers.
+    db.collection("coupons").createIndex({ endsAt: 1 }, { expireAfterSeconds: 0 }),
+    // Trial-nudge sweep: active trials expiring soon.
+    db.collection("subscriptions").createIndex({ plan: 1, status: 1, currentPeriodEnd: 1 }),
     db.collection("audit_logs").createIndex({ entityType: 1, entityId: 1, timestamp: -1 }),
     db.collection("audit_logs").createIndex({ userId: 1, timestamp: -1 }),
     db.collection("password_resets").createIndex({ tokenHash: 1 }),

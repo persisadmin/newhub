@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Modal, Skeleton, Spinner, StatusBadge } from "@/components/ui";
 import { formatMYR } from "@/lib/utils";
+import { PACKAGE_LIST, type PackageKey } from "@/lib/packages";
 
 interface Subscription {
   plan: string; interval: string; status: string;
@@ -17,11 +18,17 @@ interface CreditEntry {
   meta: { multiplier?: number; costUsd?: number; provider?: string; model?: string } | null;
 }
 
-const PACKAGES = [
-  { key: "starter", name: "Starter", price: 29900, credits: 1000, blurb: "1,000 credits — try PERSIS on real tenders" },
-  { key: "professional", name: "Professional", price: 49900, credits: 5000, blurb: "5,000 credits — for active tendering teams" },
-  { key: "enterprise", name: "Enterprise", price: 99900, credits: 20000, blurb: "20,000 credits — high-volume pipeline" },
-] as const;
+/** Marketing blurbs per package — prices and credits come from lib/packages.ts. */
+const PACKAGE_BLURB: Record<PackageKey, string> = {
+  starter: "try PERSIS on real tenders",
+  professional: "for active tendering teams",
+  enterprise: "high-volume tender pipeline",
+};
+
+const PACKAGES = PACKAGE_LIST.map((p) => ({
+  ...p,
+  blurb: `${p.credits.toLocaleString()} credits — ${PACKAGE_BLURB[p.key]}`,
+}));
 
 const ENTRY_LABEL: Record<CreditEntry["type"], string> = {
   grant: "Top-up",

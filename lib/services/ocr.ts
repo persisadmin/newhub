@@ -23,7 +23,39 @@ export function looksScanned(text: string, pageCount: number): boolean {
  * poppler's pdftoppm (no native Node dependencies) and transcribed by the
  * model. Ported from the legacy _ocr_pdf(). Limited to KIMI_OCR_MAX_PAGES
  * pages to control cost.
+ *
+ * Render DPI is adaptive: pdftoppm renders at (pageInches × DPI), so a fixed
+ * DPI produces wildly oversized images for large-format pages (the old scan
+ * flow built ~27"×15" pages → ~9MP PNGs that choked the vision endpoint). We
+ * read the page size with pdfinfo and pick a DPI targeting ~1.5 MP, the
+ * vision models' accuracy/latency sweet spot.
  */
+
+/** Long-edge pixel target for OCR renders. ~1568px keeps vision OCR sharp. */
+const TARGET_LONG_EDGE_PX = 1568;
+const MIN_DPI = 72;
+const MAX_DPI = 200;
+
+/** First-page dimensions in inches, via poppler's pdfinfo. Falls back to A4. */
+async function pageSizeInches(pdfPath: string): Promise<{ wIn: number; hIn: number }> {
+  try {
+    const { stdout } = await execFileAsync("pdfinfo", [pdfPath], { maxBuffer: 1024 * 1024 });
+    // "Page size:      595.28 x 841.89 pts (A4)"
+    const m = stdout.match(/Page size:\s+([\d.]+)\s+x\s+([\d.]+)\s+pts/i);
+    if (m) return { wIn: parseFloat(m[1]) / 72, hIn: parseFloat(m[2]) / 72 };
+  } catch (err) {
+    logger.warn("ocr.pdfinfo_failed", { error: String(err) });
+  }
+  return { wIn: 8.27, hIn: 11.69 };
+}
+
+function dpiFor({ wIn, hIn }: { wIn: number; hIn: number }): number {
+  const longIn = Math.max(wIn, hIn);
+  if (longIn <= 0) return 150;
+  const dpi = Math.round(TARGET_LONG_EDGE_PX / longIn);
+  return Math.min(MAX_DPI, Math.max(MIN_DPI, dpi));
+}
+
 export async function ocrPdf(buf: Buffer): Promise<string> {
   if (!(await isLlmConfigured())) return "";
   const maxPages = (await getLlmFeatures()).ocrMaxPages;
@@ -34,8 +66,9 @@ export async function ocrPdf(buf: Buffer): Promise<string> {
   try {
     await fs.writeFile(pdfPath, buf);
 
+    const dpi = dpiFor(await pageSizeInches(pdfPath));
     // pdftoppm writes <prefix>-<n>.png (zero-padded). Render up to maxPages.
-    await execFileAsync("pdftoppm", ["-png", "-r", "150", "-l", String(maxPages), pdfPath, prefix], {
+    await execFileAsync("pdftoppm", ["-png", "-r", String(dpi), "-l", String(maxPages), pdfPath, prefix], {
       maxBuffer: 16 * 1024 * 1024,
     });
 
@@ -69,7 +102,7 @@ export async function ocrPdf(buf: Buffer): Promise<string> {
     }
 
     const result = allText.join("\n\n");
-    logger.info("ocr.complete", { pages: files.length, chars: result.length });
+    logger.info("ocr.complete", { pages: files.length, chars: result.length, dpi });
     return result;
   } catch (err) {
     logger.error("ocr.failed", { error: String(err) });

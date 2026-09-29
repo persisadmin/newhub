@@ -12,6 +12,13 @@ import { Button, Modal } from "@/components/ui";
 interface ScannedPage { dataUrl: string; width: number; height: number }
 interface ProjectOption { _id: string; name: string }
 
+/**
+ * Soft cap on pages per scan. Each captured page is a ~0.4–0.6 MB JPEG, so
+ * ~30 pages stays comfortably under the server's 20 MB upload limit and keeps
+ * the browser-side PDF build from straining a phone's memory.
+ */
+const MAX_PAGES = 30;
+
 /** Scanning is a mobile-only feature (hard copies are photographed on-site). */
 export function isMobileDevice(): boolean {
   if (typeof navigator === "undefined") return false;
@@ -93,6 +100,11 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
   function capture() {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
+    if (pages.length >= MAX_PAGES) {
+      setError(`Page limit reached (${MAX_PAGES}). Create the PDF now, then scan the rest as a second document.`);
+      return;
+    }
+    setError(null);
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -116,16 +128,30 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
 
   async function buildPdfAndUpload() {
     if (pages.length === 0) { setError("Capture at least one page."); return; }
+    if (pages.length > MAX_PAGES) { setError(`Too many pages — split this into two scans of up to ${MAX_PAGES} pages each.`); return; }
     const pid = projectId ?? targetProject;
     if (!pid) { setError("Choose a project for this scan."); return; }
     setError(null);
 
     setBusy("building");
     const { jsPDF } = await import("jspdf");
-    const pdf = new jsPDF({ unit: "pt", format: [pages[0].width, pages[0].height] });
+    // Fixed A4 page in inches, orientation chosen per page so landscape photos
+    // stay landscape. Passing camera PIXELS as the page size (in pt) previously
+    // made jsPDF build a ~27"x15" page that pdftoppm rendered at ~9MP/page —
+    // far too large for the vision OCR endpoint. A4 keeps OCR renders sane and
+    // the aspect correct; the photo is letterboxed inside, never distorted.
+    const A4: [number, number] = [8.27, 11.69]; // inches
+    const firstLandscape = pages[0].width > pages[0].height;
+    const pdf = new jsPDF({ unit: "in", format: "a4", orientation: firstLandscape ? "landscape" : "portrait", compress: true });
     pages.forEach((page, i) => {
-      if (i > 0) pdf.addPage([page.width, page.height]);
-      pdf.addImage(page.dataUrl, "JPEG", 0, 0, page.width, page.height);
+      const landscape = page.width > page.height;
+      const [pw, ph] = landscape ? [A4[1], A4[0]] : A4;
+      if (i > 0) pdf.addPage("a4", landscape ? "landscape" : "portrait");
+      // Letterbox: scale the photo to fit the page, preserving aspect ratio.
+      const scale = Math.min(pw / page.width, ph / page.height);
+      const w = page.width * scale;
+      const h = page.height * scale;
+      pdf.addImage(page.dataUrl, "JPEG", (pw - w) / 2, (ph - h) / 2, w, h);
     });
     const blob = pdf.output("blob");
 
@@ -197,7 +223,7 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
 
           {pages.length > 0 && (
             <div>
-              <p className="mb-2 text-xs font-medium text-muted-foreground">Captured pages ({pages.length})</p>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Captured pages ({pages.length}/{MAX_PAGES})</p>
               <div className="flex flex-nowrap gap-2 overflow-x-auto pb-1">
                 {pages.map((p, i) => (
                   <div key={i} className="group relative shrink-0">
@@ -219,7 +245,7 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
 
           {/* Pinned action bar — stays visible no matter how many pages are captured */}
           <div className="sticky bottom-0 mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-card pt-4">
-            <Button variant="outline" onClick={capture} disabled={!cameraReady || busy !== "idle"}>
+            <Button variant="outline" onClick={capture} disabled={!cameraReady || busy !== "idle" || pages.length >= MAX_PAGES}>
               <Camera size={14} /> Capture page
             </Button>
             <div className="flex gap-2">

@@ -50,7 +50,12 @@ export interface PricedRow {
   reviewFlag: string | null;
 }
 
-export async function buildPricedBoqXlsx(rows: PricedRow[], projectTitle: string): Promise<BuiltFile> {
+export async function buildPricedBoqXlsx(
+  rows: PricedRow[],
+  projectTitle: string,
+  profitMarginPct: number | null = null
+): Promise<BuiltFile> {
+  const uplift = profitMarginPct != null && profitMarginPct > 0 ? 1 + profitMarginPct / 100 : null;
   const wb = new ExcelJS.Workbook();
   wb.creator = "PERSIS";
   const ws = wb.addWorksheet("Priced BOQ");
@@ -77,8 +82,10 @@ export async function buildPricedBoqXlsx(rows: PricedRow[], projectTitle: string
       row.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEDF2F9" } };
     }
     const qty = r.quantity ?? null;
-    const rate = r.selectedPrice ?? null;
-    const amount = qty != null && rate != null ? qty * rate : null;
+    const costRate = r.selectedPrice ?? null;
+    // Tender rate carries the profit margin; cost rate stays internal.
+    const rate = costRate != null && uplift != null ? Math.round(costRate * uplift * 100) / 100 : costRate;
+    const amount = qty != null && rate != null ? Math.round(qty * rate * 100) / 100 : null;
     if (amount != null) total += amount;
     const row = ws.addRow({
       itemNo: r.itemNo,
@@ -95,7 +102,15 @@ export async function buildPricedBoqXlsx(rows: PricedRow[], projectTitle: string
     if (r.reviewFlag) row.getCell("review").font = { color: { argb: "FFB45309" }, bold: true };
   }
 
-  const totalRow = ws.addRow({ description: "TOTAL (excluding prelims)", amount: total });
+  if (uplift != null && total > 0) {
+    const costTotal = Math.round((total / uplift) * 100) / 100;
+    const marginAmount = Math.round((total - costTotal) * 100) / 100;
+    const costRow = ws.addRow({ description: "COST SUBTOTAL (before margin)", amount: costTotal });
+    costRow.getCell("amount").numFmt = "#,##0.00";
+    const marginRow = ws.addRow({ description: `PROFIT MARGIN (${profitMarginPct}%)`, amount: marginAmount });
+    marginRow.getCell("amount").numFmt = "#,##0.00";
+  }
+  const totalRow = ws.addRow({ description: "TENDER TOTAL (excluding prelims)", amount: Math.round(total * 100) / 100 });
   totalRow.font = { bold: true };
   totalRow.getCell("amount").numFmt = "#,##0.00";
 

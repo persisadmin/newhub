@@ -6,6 +6,8 @@ import { rateLimit } from "@/lib/rate-limit";
 import { audit } from "@/lib/audit";
 import { isMaintenanceMode } from "@/lib/services/maintenance";
 import { applySignupPromo } from "@/lib/services/promo";
+import { sendWelcomeEmail } from "@/lib/email";
+import { logger } from "@/lib/logger";
 
 const schema = z.object({
   name: z.string().min(2).max(100),
@@ -39,6 +41,10 @@ export async function POST(req: Request) {
     });
     await audit({ userId: res.insertedId, action: "user.registered", entityType: "user", entityId: res.insertedId, newValue: { email, via: "credentials" }, source: "auth" });
     await applySignupPromo(res.insertedId, email);
+    // Welcome email — fire-and-forget so a mail outage can't block signup.
+    sendWelcomeEmail(email, body.name).catch((err) =>
+      logger.error("register.welcome_email_failed", { email, error: String(err) })
+    );
     return ok({ id: String(res.insertedId) }, 201);
   } catch (err) {
     return handleError(err);
