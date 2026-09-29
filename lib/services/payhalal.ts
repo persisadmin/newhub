@@ -488,6 +488,18 @@ export async function payHalalSelfTest(amountSen = 1000): Promise<PayHalalSelfTe
         'PAYHALAL_APP_SECRET does not start with "secret-" — check you copied the Secret and not the App Key.'
       );
     }
+    // The app key and secret must come from the SAME PayHalal app. Mixing the
+    // live key with the testing secret (or vice versa) is answered with
+    // "SHA256 Signature invalid." — verified against both endpoints.
+    const keyIsTesting = cfg.appId.toLowerCase().startsWith("app-testing-");
+    const secretIsTesting = cfg.appSecret.toLowerCase().startsWith("secret-testing-");
+    if (keyIsTesting !== secretIsTesting) {
+      result.warnings.push(
+        `PAYHALAL_APP_ID and PAYHALAL_APP_SECRET appear to come from DIFFERENT environments ` +
+          `(app key = ${keyIsTesting ? "testing" : "live"}, secret = ${secretIsTesting ? "testing" : "live"}). ` +
+          `That is answered with "SHA256 Signature invalid." — copy both values from the same PayHalal app.`
+      );
+    }
   }
 
   if (!cfg) {
