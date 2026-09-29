@@ -142,6 +142,8 @@ export default function SettingsPage() {
   function choosePayment(plan: string) {
     setError(null);
     const available = (["payhalal", "duitnow_qr"] as const).filter((m) => payMethods[m]);
+    // None reported (e.g. still loading): the QR flow always has a provider, so use it.
+    if (available.length === 0) { startPayment(plan, "duitnow_qr"); return; }
     if (available.length === 1) { startPayment(plan, available[0]); return; }
     setPayMethodFor(plan);
   }
