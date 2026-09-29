@@ -305,6 +305,12 @@ export async function handlePayHalalCallback(
   const db = await getDb();
 
   // Persist the raw callback for audit/dispute, whatever the outcome.
+  // The text/amountsSen/matched fields mirror the DuitNow bridge documents so
+  // the admin notification log can render PayHalal callbacks without crashing.
+  const callbackAmountSen =
+    data.amount != null && Number.isFinite(Number(data.amount))
+      ? Math.round(Number(data.amount) * 100)
+      : null;
   await db.collection("payment_notifications").insertOne({
     source: "payhalal",
     providerRef: orderId,
@@ -312,6 +318,11 @@ export async function handlePayHalalCallback(
     status: data.status ?? null,
     channel: data.channel ?? null,
     amount: data.amount ?? null,
+    text:
+      `PayHalal ${data.status ?? "?"} · ${data.channel ?? "?"} · order ${orderId}` +
+      (data.transaction_id ? ` · txn ${data.transaction_id}` : ""),
+    amountsSen: callbackAmountSen != null ? [callbackAmountSen] : [],
+    matched: data.status === "SUCCESS",
     raw: data,
     createdAt: new Date(),
   }).catch((err) => logger.warn("payhalal.callback_log_failed", { error: String(err) }));

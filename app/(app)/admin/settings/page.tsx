@@ -27,7 +27,8 @@ interface ProviderPrice { providerId: string; inputUsdPerM: number; outputUsdPer
 interface Billing { creditMultiplier: number; usdToMyr: number; prices: ProviderPrice[] }
 
 interface PendingPayment { providerRef: string; amount: number; plan: string; status: string; createdAt: string; userEmail: string }
-interface NotifyLog { _id: string; text: string; amountsSen: number[]; matched: boolean; createdAt: string }
+/** Shared by the DuitNow bridge and PayHalal callbacks; some fields are bridge-only. */
+interface NotifyLog { _id: string; text?: string; amountsSen?: number[]; matched?: boolean; createdAt: string }
 interface Coupon {
   _id: string; code: string; discountPct: number | null; priceSen: number | null;
   startsAt: string | null; endsAt: string | null; audience: string; userEmail: string | null;
@@ -756,14 +757,14 @@ export default function AdminLlmSettingsPage() {
 
           {notifyLog && notifyLog.length > 0 && (
             <div>
-              <p className="mb-2 text-xs font-medium text-muted-foreground">Recent phone notifications (bridge log)</p>
+              <p className="mb-2 text-xs font-medium text-muted-foreground">Recent payment notifications (DuitNow bridge + PayHalal callbacks)</p>
               <ul className="divide-y divide-border rounded-lg border border-border text-xs">
                 {notifyLog.map((n) => (
                   <li key={n._id} className="px-3 py-2">
                     <span className={n.matched ? "text-success font-medium" : "text-muted-foreground"}>{n.matched ? "MATCHED" : "unmatched"}</span>
                     <span className="mx-2 text-muted-foreground">{new Date(n.createdAt).toLocaleString("en-MY")}</span>
-                    {n.amountsSen.length > 0 && <span className="mr-2 font-mono">{n.amountsSen.map((a) => `RM${(a / 100).toFixed(2)}`).join(", ")}</span>}
-                    <span className="text-muted-foreground break-all">{n.text.slice(0, 140)}</span>
+                    {(n.amountsSen ?? []).length > 0 && <span className="mr-2 font-mono">{(n.amountsSen ?? []).map((a) => `RM${(a / 100).toFixed(2)}`).join(", ")}</span>}
+                    <span className="text-muted-foreground break-all">{(n.text ?? "").slice(0, 140)}</span>
                   </li>
                 ))}
               </ul>
