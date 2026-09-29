@@ -1,5 +1,19 @@
+# Dependencies
 node_modules/
+
+# Next.js build output
 .next/
-.env*.local
-data/uploads/
+
+# Environment — never commit real secrets.
+# The .env.example template is the single deliberate exception.
+.env*
+!.env.example
+
+# Runtime data: uploaded tender documents and generated deliverables
+data/
+
+# Logs
 *.log
+
+# Stray local artifacts
+providers-fix.zip
