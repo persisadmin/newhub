@@ -114,27 +114,13 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
   }, []);
 
   /**
-   * Attach the stream to the (already-mounted) <video> and mark the camera
-   * ready only once frames are actually flowing. This runs in an effect that
-   * depends on [cameraReady === false + open], so it executes AFTER React has
-   * committed the <video> element — fixing the race where the camera started
-   * before the element existed and the Capture button never enabled.
+   * Open the camera and attach it to the <video> in ONE effect. The <video> is
+   * always mounted before effects run (refs are set first), so attaching after
+   * the async getUserMedia resolves is safe. Splitting open and attach across
+   * two effects caused a race: the attach effect ran before the stream existed
+   * and never re-ran when the ref was later filled, leaving the preview black
+   * and the Capture button disabled.
    */
-  useEffect(() => {
-    if (!open || cameraReady) return;
-    const stream = streamRef.current;
-    const video = videoRef.current;
-    if (!stream || !video) return;
-    video.srcObject = stream;
-    const onReady = () => setCameraReady(true);
-    video.addEventListener("playing", onReady);
-    video.play().catch(() => {
-      // Some browsers reject play() if the tab is hidden; "playing" may still fire.
-    });
-    return () => video.removeEventListener("playing", onReady);
-  }, [open, cameraReady]);
-
-  // Camera lifecycle tied to the modal open state (and the retry nonce).
   useEffect(() => {
     if (!open) { stopCamera(); return; }
     if (!isMobileDevice()) {
@@ -142,24 +128,56 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
       return;
     }
     let cancelled = false;
+    let localStream: MediaStream | null = null;
+
+    const video = videoRef.current;
+    // Ready when frames are actually flowing. Listen to several events AND poll
+    // dimensions, because not every browser fires "playing" reliably.
+    const markReady = () => { if (!cancelled) setCameraReady(true); };
+    const checkDimensions = () => {
+      if (!cancelled && videoRef.current && videoRef.current.videoWidth > 0) markReady();
+    };
+    video?.addEventListener("playing", markReady);
+    video?.addEventListener("loadeddata", markReady);
+    video?.addEventListener("canplay", markReady);
+    const poll = window.setInterval(checkDimensions, 400);
+
     (async () => {
       setCameraError(null);
+      setCameraReady(false);
       try {
         const stream = await openCameraStream();
         if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
+        localStream = stream;
         streamRef.current = stream;
-        // Attachment happens in the effect above once the <video> is mounted.
+        const v = videoRef.current;
+        if (v) {
+          v.srcObject = stream;
+          v.play().catch(() => {
+            // Some browsers reject play() when the tab is hidden; events/poll still catch it.
+          });
+        }
       } catch (err) {
-        setCameraError(describeCameraError(err));
+        if (!cancelled) setCameraError(describeCameraError(err));
       }
     })();
+
     if (!projectId) {
       fetch("/api/projects")
         .then((r) => r.json())
         .then((j) => { if (j.ok) setProjects(j.data as ProjectOption[]); })
         .catch(() => {});
     }
-    return () => { cancelled = true; stopCamera(); };
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+      video?.removeEventListener("playing", markReady);
+      video?.removeEventListener("loadeddata", markReady);
+      video?.removeEventListener("canplay", markReady);
+      if (video) video.srcObject = null;
+      localStream?.getTracks().forEach((t) => t.stop());
+      stopCamera();
+    };
   }, [open, projectId, stopCamera, retryNonce]);
 
   function capture() {
