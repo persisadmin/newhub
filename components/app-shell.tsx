@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useState } from "react";
-import { LayoutDashboard, FolderKanban, Flag, Settings, ShieldCheck, LogOut, Menu, X, Tags, Landmark, Globe } from "lucide-react";
+import { LayoutDashboard, FolderKanban, Flag, Settings, ShieldCheck, LogOut, Menu, X, Tags, Landmark, Globe, Users } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +17,7 @@ const NAV = [
 
 const ADMIN_NAV = [
   { href: "/admin/settings", label: "Admin", icon: ShieldCheck },
+  { href: "/admin/users", label: "Users", icon: Users },
   { href: "/admin/landing", label: "Landing Pages", icon: Globe },
   { href: "/admin/price-lists", label: "Agency Price Lists", icon: Landmark },
 ];

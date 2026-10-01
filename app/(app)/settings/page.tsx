@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Skeleton, Spinner, StatusBadge } from "@/components/ui";
+import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Label, Skeleton, Spinner, StatusBadge } from "@/components/ui";
 import { formatMYR } from "@/lib/utils";
 import { PACKAGE_LIST, type PackageKey } from "@/lib/packages";
 
@@ -58,6 +58,17 @@ export default function SettingsPage() {
   const [loaded, setLoaded] = useState(false);
   const [couponInput, setCouponInput] = useState("");
   const [couponApplied, setCouponApplied] = useState<string | null>(null);
+  // Editable profile + change password
+  const [profile, setProfile] = useState<{ name: string; companyName: string; phone: string; address: { line1: string; line2: string; city: string; state: string; postcode: string } }>({
+    name: "", companyName: "", phone: "", address: { line1: "", line2: "", city: "", state: "", postcode: "" },
+  });
+  const [profileLoaded, setProfileLoaded] = useState(false);
+  const [hasPassword, setHasPassword] = useState(true);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMsg, setProfileMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [pwForm, setPwForm] = useState({ current: "", next: "", confirm: "" });
+  const [pwSaving, setPwSaving] = useState(false);
+  const [pwMsg, setPwMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   async function load() {
     const res = await fetch("/api/subscription");
@@ -119,6 +130,84 @@ export default function SettingsPage() {
     return () => clearInterval(timer);
   }, []);
 
+  // Load the editable profile (name, company, phone, address) once.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch("/api/user/profile");
+        const json = await res.json();
+        if (json.ok) {
+          const d = json.data;
+          setProfile({
+            name: d.name ?? "",
+            companyName: d.companyName ?? "",
+            phone: d.phone ?? "",
+            address: {
+              line1: d.address?.line1 ?? "",
+              line2: d.address?.line2 ?? "",
+              city: d.address?.city ?? "",
+              state: d.address?.state ?? "",
+              postcode: d.address?.postcode ?? "",
+            },
+          });
+          setHasPassword(Boolean(d.hasPassword));
+        }
+      } finally {
+        setProfileLoaded(true);
+      }
+    })();
+  }, []);
+
+  async function saveProfile() {
+    setProfileSaving(true);
+    setProfileMsg(null);
+    try {
+      const res = await fetch("/api/user/profile", {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: profile.name,
+          companyName: profile.companyName,
+          phone: profile.phone,
+          address: profile.address,
+        }),
+      });
+      const json = await res.json();
+      setProfileMsg(json.ok
+        ? { ok: true, text: "Profile saved." }
+        : { ok: false, text: json.error?.message ?? "Could not save your profile." });
+    } catch {
+      setProfileMsg({ ok: false, text: "Network error — please try again." });
+    } finally {
+      setProfileSaving(false);
+    }
+  }
+
+  async function changePassword() {
+    setPwMsg(null);
+    if (pwForm.next !== pwForm.confirm) {
+      setPwMsg({ ok: false, text: "New passwords do not match." });
+      return;
+    }
+    setPwSaving(true);
+    try {
+      const res = await fetch("/api/user/change-password", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: pwForm.current, newPassword: pwForm.next }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setPwMsg({ ok: true, text: "Password changed." });
+        setPwForm({ current: "", next: "", confirm: "" });
+      } else {
+        setPwMsg({ ok: false, text: json.error?.message ?? "Could not change your password." });
+      }
+    } catch {
+      setPwMsg({ ok: false, text: "Network error — please try again." });
+    } finally {
+      setPwSaving(false);
+    }
+  }
+
   /** Customer picked a plan: start the online-banking checkout. */
   function choosePayment(plan: string) {
     setError(null);
@@ -164,18 +253,106 @@ export default function SettingsPage() {
 
       {/* Profile */}
       <Card>
-        <CardHeader><CardTitle className="text-base">Profile</CardTitle></CardHeader>
-        <CardContent>
+        <CardHeader>
           <div className="flex items-center gap-4">
             <div className="flex h-14 w-14 items-center justify-center rounded-full bg-primary text-lg font-bold text-primary-foreground">
-              {(session?.user?.name ?? "U").slice(0, 1).toUpperCase()}
+              {(profile.name || session?.user?.name || "U").slice(0, 1).toUpperCase()}
             </div>
             <div>
-              <p className="font-medium">{session?.user?.name}</p>
-              <p className="text-sm text-muted-foreground">{session?.user?.email}</p>
-              <Badge variant="secondary" className="mt-1">{(session?.user as { role?: string } | undefined)?.role ?? "contractor"}</Badge>
+              <CardTitle className="text-base">Profile &amp; company</CardTitle>
+              <CardDescription>
+                {session?.user?.email} · {(session?.user as { role?: string } | undefined)?.role ?? "contractor"}
+              </CardDescription>
             </div>
           </div>
+        </CardHeader>
+        <CardContent>
+          {!profileLoaded ? <Skeleton className="h-40 w-full" /> : (
+            <div className="space-y-4">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Full name" id="pf-name">
+                  <Input id="pf-name" value={profile.name} onChange={(e) => setProfile({ ...profile, name: e.target.value })} placeholder="Your name" />
+                </Field>
+                <Field label="Company name" id="pf-company">
+                  <Input id="pf-company" value={profile.companyName} onChange={(e) => setProfile({ ...profile, companyName: e.target.value })} placeholder="Optional" />
+                </Field>
+                <Field label="Phone number" id="pf-phone">
+                  <Input id="pf-phone" value={profile.phone} onChange={(e) => setProfile({ ...profile, phone: e.target.value })} placeholder="Optional" />
+                </Field>
+              </div>
+
+              <div className="border-t border-border pt-4">
+                <p className="mb-3 text-sm font-medium">Address <span className="font-normal text-muted-foreground">(optional)</span></p>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Address line 1" id="pf-line1" className="sm:col-span-2">
+                    <Input id="pf-line1" value={profile.address.line1} onChange={(e) => setProfile({ ...profile, address: { ...profile.address, line1: e.target.value } })} />
+                  </Field>
+                  <Field label="Address line 2" id="pf-line2" className="sm:col-span-2">
+                    <Input id="pf-line2" value={profile.address.line2} onChange={(e) => setProfile({ ...profile, address: { ...profile.address, line2: e.target.value } })} />
+                  </Field>
+                  <Field label="City" id="pf-city">
+                    <Input id="pf-city" value={profile.address.city} onChange={(e) => setProfile({ ...profile, address: { ...profile.address, city: e.target.value } })} />
+                  </Field>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="State" id="pf-state">
+                      <Input id="pf-state" value={profile.address.state} onChange={(e) => setProfile({ ...profile, address: { ...profile.address, state: e.target.value } })} />
+                    </Field>
+                    <Field label="Postcode" id="pf-postcode">
+                      <Input id="pf-postcode" value={profile.address.postcode} onChange={(e) => setProfile({ ...profile, address: { ...profile.address, postcode: e.target.value } })} />
+                    </Field>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <Button onClick={saveProfile} disabled={profileSaving || profile.name.trim().length < 2}>
+                  {profileSaving && <Spinner />} Save profile
+                </Button>
+                {profileMsg && (
+                  <p className={`text-sm ${profileMsg.ok ? "text-success" : "text-destructive"}`}>{profileMsg.text}</p>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">Email can&apos;t be changed — it&apos;s your sign-in identity. Name must be at least 2 characters; everything else is optional.</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Change password */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Change password</CardTitle>
+          <CardDescription>
+            {hasPassword
+              ? "Enter your current password to set a new one."
+              : "This account signs in with Google, so there is no password to change."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {hasPassword ? (
+            <div className="max-w-sm space-y-4">
+              <Field label="Current password" id="pw-current">
+                <Input id="pw-current" type="password" autoComplete="current-password" value={pwForm.current} onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })} />
+              </Field>
+              <Field label="New password" id="pw-next">
+                <Input id="pw-next" type="password" autoComplete="new-password" value={pwForm.next} onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })} />
+              </Field>
+              <Field label="Confirm new password" id="pw-confirm">
+                <Input id="pw-confirm" type="password" autoComplete="new-password" value={pwForm.confirm} onChange={(e) => setPwForm({ ...pwForm, confirm: e.target.value })} />
+              </Field>
+              <p className="text-xs text-muted-foreground">At least 8 characters, with a letter and a number.</p>
+              <div className="flex items-center gap-3">
+                <Button onClick={changePassword} disabled={pwSaving || !pwForm.current || pwForm.next.length < 8}>
+                  {pwSaving && <Spinner />} Change password
+                </Button>
+                {pwMsg && <p className={`text-sm ${pwMsg.ok ? "text-success" : "text-destructive"}`}>{pwMsg.text}</p>}
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              You signed up with Google. To use a password instead, sign out and use &quot;Forgot password&quot; on the sign-in page to set one.
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -325,6 +502,16 @@ export default function SettingsPage() {
         )}
       </div>
 
+    </div>
+  );
+}
+
+/** Label + control wrapper for the settings forms. */
+function Field({ label, id, className, children }: { label: string; id: string; className?: string; children: React.ReactNode }) {
+  return (
+    <div className={className}>
+      <Label htmlFor={id} className="mb-1.5 block text-sm font-medium">{label}</Label>
+      {children}
     </div>
   );
 }

@@ -9,6 +9,18 @@ export interface UserDoc {
   image?: string;
   passwordHash?: string; // absent for OAuth-only accounts
   role: Role;
+  /** Set by OAuth providers (Google) — used to tell password vs OAuth-only accounts. */
+  emailVerified?: Date | null;
+  /** Optional profile details the user can fill in from Settings. */
+  companyName?: string;
+  phone?: string;
+  address?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    postcode?: string;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
