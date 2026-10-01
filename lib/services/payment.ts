@@ -17,6 +17,18 @@ import {
   verifyCallbackHash,
   type PayHalalCallback,
 } from "@/lib/services/payhalal";
+import {
+  ChipError,
+  chipAmountMatchesSen,
+  createChipPurchase,
+  fetchChipPurchase,
+  getChipConfig,
+  getChipPublicKey,
+  isChipFailedStatus,
+  isChipPaidStatus,
+  verifyChipSignature,
+  type ChipCheckoutMethod,
+} from "@/lib/services/chip";
 import { PACKAGES, type PackageKey } from "@/lib/packages";
 import type { PaymentDoc, SubscriptionDoc } from "@/lib/domain/types";
 
@@ -94,15 +106,16 @@ export function getPaymentProvider(): PaymentProvider {
   return mockTngProvider;
 }
 
-/** How the customer pays. DuitNow presents a QR; PayHalal redirects to a hosted page. */
-export type CheckoutMethod = "duitnow_qr" | "payhalal";
+/** How the customer pays. Chip redirects to a hosted page (FPX online banking
+ *  or DuitNow QR); PayHalal and DuitNow are legacy providers kept for history. */
+export type CheckoutMethod = "chip_fpx" | "chip_duitnow_qr" | "payhalal" | "duitnow_qr";
 
 export async function initiatePayment(
   userId: ObjectId,
   plan: PlanKey,
   interval: "monthly" | "yearly" = "monthly",
   couponCode?: string,
-  method: CheckoutMethod = "duitnow_qr"
+  method: CheckoutMethod = "chip_fpx"
 ) {
   await ensureIndexes();
   const db = await getDb();
@@ -130,6 +143,57 @@ export async function initiatePayment(
     redeemedCode = coupon.code;
   }
   const amountSen = baseSen;
+
+  /* ---- CHIP In Asia: hosted checkout (FPX online banking / DuitNow QR) ---- */
+  if (method === "chip_fpx" || method === "chip_duitnow_qr") {
+    const cfg = getChipConfig();
+    if (!cfg) {
+      throw new HttpError(503, "Online payment is temporarily unavailable. Please try again shortly or contact support.", "CHIP_NOT_CONFIGURED");
+    }
+    const chipMethod = method as ChipCheckoutMethod;
+    // Our order id is sent as the purchase `reference` and is our providerRef.
+    const orderId = `PS${crypto.randomBytes(8).toString("hex").toUpperCase()}`;
+    // Chip needs absolute return URLs (sent per-purchase, so no dashboard setup).
+    const base = (getEnv().NEXTAUTH_URL ?? "").replace(/\/+$/, "");
+    let purchase;
+    try {
+      purchase = await createChipPurchase(cfg, {
+        amountSen,
+        reference: orderId,
+        customerEmail: (userDoc?.email as string) ?? "",
+        productName: `PERSIS ${PLANS[plan].name} package`,
+        method: chipMethod,
+        successRedirect: `${base}/api/payments/chip/return?outcome=success&ref=${encodeURIComponent(orderId)}`,
+        failureRedirect: `${base}/api/payments/chip/return?outcome=failure&ref=${encodeURIComponent(orderId)}`,
+        cancelRedirect: `${base}/settings`,
+        successCallback: base ? `${base}/api/payments/chip/callback` : undefined,
+      });
+    } catch (err) {
+      if (err instanceof ChipError) {
+        logger.error("chip.initiate_failed", { status: err.status, method: chipMethod, error: err.message });
+        throw new HttpError(502, `The payment gateway could not start this payment (${err.message}). Please try again.`, "CHIP_CREATE_FAILED");
+      }
+      throw err;
+    }
+    const inserted = await db.collection<PaymentDoc>("payments").insertOne({
+      userId, plan, interval, amount: amountSen, currency: "MYR",
+      status: "initiated", provider: "chip", method,
+      providerRef: orderId, providerTransactionId: purchase.id,
+      baseAmount: baseSen, couponCode: redeemedCode,
+      createdAt: now, updatedAt: now,
+    } as PaymentDoc);
+    await audit({
+      userId, action: "payment.initiated", entityType: "payment", entityId: inserted.insertedId,
+      newValue: { plan, interval, amountSen, couponCode: redeemedCode, provider: "chip", method, purchaseId: purchase.id },
+      source: "payment",
+    });
+    // checkout_url is a plain GET page — redirect the browser straight there.
+    return {
+      paymentId: String(inserted.insertedId), providerRef: orderId,
+      redirectUrl: purchase.checkoutUrl,
+      amountSen, provider: "chip", method, couponCode: redeemedCode,
+    };
+  }
 
   /* ---- PayHalal: hosted redirect checkout (FPX / card / e-wallet) ---- */
   if (method === "payhalal") {
@@ -253,6 +317,34 @@ export async function verifyAndActivate(providerRef: string): Promise<{ verified
   if (!payment) return { verified: false, status: "not_found" };
   if (payment.status === "verified") return { verified: true, status: "verified" };
 
+  // Chip is verified by asking Chip directly about the purchase id we stored
+  // at creation time. `paid`/`cleared`/`settled` all mean the money is in.
+  if (payment.provider === "chip") {
+    const cfg = getChipConfig();
+    if (!cfg) return { verified: false, status: "not_configured" };
+    if (!payment.providerTransactionId) return { verified: false, status: "pending" };
+    const purchase = await fetchChipPurchase(cfg, payment.providerTransactionId);
+    if (!purchase) return { verified: false, status: "not_found" };
+    if (isChipPaidStatus(purchase.status)) {
+      if (!chipAmountMatchesSen(purchase.totalSen, payment.amount)) {
+        logger.error("chip.amount_mismatch_on_verify", {
+          providerRef, expectedSen: payment.amount, reported: purchase.totalSen,
+        });
+        return { verified: false, status: "amount_mismatch" };
+      }
+      await activatePayment(payment);
+      return { verified: true, status: "verified" };
+    }
+    if (isChipFailedStatus(purchase.status)) {
+      await db.collection<PaymentDoc>("payments").updateOne(
+        { _id: payment._id },
+        { $set: { status: "failed", updatedAt: new Date() } }
+      );
+      return { verified: false, status: purchase.status };
+    }
+    return { verified: false, status: purchase.status };
+  }
+
   // PayHalal is verified by asking PayHalal directly about the transaction id
   // we captured from its signed callback.
   if (payment.provider === "payhalal") {
@@ -363,6 +455,107 @@ export async function handlePayHalalCallback(
   logger.info("payhalal.activated", {
     providerRef: orderId, transactionId: data.transaction_id, channel: data.channel,
   });
+  return { outcome: "ok" };
+}
+
+/* ---------------- CHIP In Asia callback ---------------- */
+
+export type ChipCallbackOutcome = "ok" | "failed" | "rejected" | "not_found" | "amount_mismatch" | "not_configured";
+
+/**
+ * Handle CHIP's signed `success_callback` delivery.
+ *
+ * Trust model: the body is RSA-signed (X-Signature) with a key whose public
+ * half Chip serves at GET /public_key/, so a valid signature proves Chip sent
+ * it. We still cross-check the amount against our own record before granting
+ * anything, and activation is idempotent. `verifyAndActivate` adds a second,
+ * independent confirmation (GET /purchases/{id}/) for returning customers.
+ *
+ * `rawBody` must be the exact request body bytes — the signature covers them,
+ * so re-serialising the parsed object would break verification.
+ */
+export async function handleChipCallback(
+  rawBody: string,
+  signature: string | null
+): Promise<{ outcome: ChipCallbackOutcome; message?: string }> {
+  const cfg = getChipConfig();
+  if (!cfg) return { outcome: "not_configured", message: "chip not configured" };
+  const publicKey = await getChipPublicKey(cfg);
+  if (!publicKey) return { outcome: "rejected", message: "no public key available" };
+  if (!verifyChipSignature(rawBody, signature, publicKey)) {
+    logger.warn("chip.callback_bad_signature");
+    return { outcome: "rejected", message: "bad signature" };
+  }
+
+  let purchase: Record<string, unknown>;
+  try {
+    purchase = JSON.parse(rawBody) as Record<string, unknown>;
+  } catch {
+    return { outcome: "rejected", message: "unparseable body" };
+  }
+
+  const orderId = typeof purchase.reference === "string" ? purchase.reference : null;
+  if (!orderId) return { outcome: "rejected", message: "missing reference" };
+  const status = typeof purchase.status === "string" ? purchase.status : null;
+  const purchaseId = typeof purchase.id === "string" ? purchase.id : null;
+  const totalSen = (purchase.purchase as Record<string, unknown> | undefined)?.total;
+
+  await ensureIndexes();
+  const db = await getDb();
+
+  // Persist the raw callback for audit/dispute, whatever the outcome.
+  const amountsSen = Number.isFinite(Number(totalSen)) ? [Math.round(Number(totalSen))] : [];
+  await db.collection("payment_notifications").insertOne({
+    source: "chip",
+    providerRef: orderId,
+    transactionId: purchaseId,
+    status,
+    channel: null,
+    amount: amountsSen.length ? amountsSen[0] / 100 : null,
+    text: `Chip ${status ?? "?"} · order ${orderId}` + (purchaseId ? ` · purchase ${purchaseId.slice(0, 8)}…` : ""),
+    amountsSen,
+    matched: isChipPaidStatus(status),
+    raw: purchase,
+    createdAt: new Date(),
+  }).catch((err) => logger.warn("chip.callback_log_failed", { error: String(err) }));
+
+  const payment = await db.collection<PaymentDoc>("payments").findOne({ providerRef: orderId });
+  if (!payment) return { outcome: "not_found", message: "unknown order" };
+
+  // Idempotent: a repeat delivery is a success, not a second grant.
+  if (payment.status === "verified") return { outcome: "ok" };
+
+  if (!isChipPaidStatus(status)) {
+    // Only a terminal outcome flips the payment to failed; "created"/"viewed"
+    // etc. are still in flight, so we leave the payment open.
+    if (isChipFailedStatus(status)) {
+      await db.collection<PaymentDoc>("payments").updateOne(
+        { _id: payment._id },
+        { $set: { status: "failed", updatedAt: new Date() } }
+      );
+      logger.warn("chip.callback_failed_status", { providerRef: orderId, status });
+      return { outcome: "failed", message: status ?? "unknown" };
+    }
+    return { outcome: "ok", message: `in flight (${status ?? "unknown"})` };
+  }
+
+  // Never trust the delivered amount — compare it with what we charged.
+  if (!chipAmountMatchesSen(totalSen, payment.amount)) {
+    logger.error("chip.amount_mismatch", {
+      providerRef: orderId, expectedSen: payment.amount, reported: totalSen,
+    });
+    return { outcome: "amount_mismatch", message: "amount mismatch" };
+  }
+
+  if (purchaseId && payment.providerTransactionId !== purchaseId) {
+    await db.collection<PaymentDoc>("payments").updateOne(
+      { _id: payment._id },
+      { $set: { providerTransactionId: purchaseId, updatedAt: new Date() } }
+    );
+  }
+  await markPaymentPaid(orderId);
+  await activatePayment({ ...payment, providerTransactionId: purchaseId ?? payment.providerTransactionId });
+  logger.info("chip.activated", { providerRef: orderId, purchaseId, status });
   return { outcome: "ok" };
 }
 

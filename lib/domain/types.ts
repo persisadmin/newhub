@@ -227,9 +227,9 @@ export interface PaymentDoc {
   provider: string;
   providerRef: string;
   qrPayload?: string;
-  /** Checkout method the customer chose; defaults to the QR flow when absent. */
-  method?: "duitnow_qr" | "payhalal";
-  /** PayHalal transaction id, captured from the verified server callback. */
+  /** Checkout method the customer chose (chip_* is the live processor). */
+  method?: "chip_fpx" | "chip_duitnow_qr" | "payhalal" | "duitnow_qr";
+  /** Gateway transaction/purchase id (Chip purchase id, PayHalal transaction id). */
   providerTransactionId?: string;
   /** PayHalal payment channel, e.g. "FPX" or "CC". */
   channel?: string;

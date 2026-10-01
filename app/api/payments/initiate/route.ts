@@ -12,8 +12,9 @@ const schema = z.object({
   plan: z.enum(["starter", "professional", "enterprise"]),
   interval: z.enum(["monthly", "yearly"]),
   couponCode: z.string().max(40).optional(),
-  /** Checkout method. Defaults to the DuitNow QR flow for back-compat. */
-  method: z.enum(["duitnow_qr", "payhalal"]).optional(),
+  /** Checkout method. Chip is the live processor; the legacy values are kept
+   *  so old clients don't 422, though only chip_* is offered in the UI. */
+  method: z.enum(["chip_fpx", "chip_duitnow_qr", "payhalal", "duitnow_qr"]).optional(),
 });
 
 export async function POST(req: Request) {
@@ -27,7 +28,7 @@ export async function POST(req: Request) {
       body.plan as keyof typeof PLANS,
       body.interval,
       body.couponCode,
-      body.method ?? "duitnow_qr"
+      body.method ?? "chip_fpx"
     );
     return ok(result, 201);
   } catch (err) {

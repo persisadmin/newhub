@@ -3,7 +3,7 @@ import { getDb, ensureIndexes } from "@/lib/db";
 import { ok, handleError } from "@/lib/api";
 import { requireUser } from "@/lib/auth-helpers";
 import { getCreditBalance, getActiveSubscription, listCreditHistory } from "@/lib/services/credits";
-import { getPayHalalConfig, isPayHalalConfigured } from "@/lib/services/payhalal";
+import { isChipConfigured } from "@/lib/services/chip";
 
 export const dynamic = "force-dynamic";
 
@@ -23,11 +23,11 @@ export async function GET() {
     return ok({
       subscription: subscription ? { ...subscription, _id: String(subscription._id), userId: String(subscription.userId) } : null,
       subscriptionActive: active !== null,
-      /** Checkout methods available to the customer — online banking only. */
+      /** Checkout methods available to the customer (Chip In Asia). */
       paymentMethods: {
-        payhalal: isPayHalalConfigured(),
+        chip_fpx: isChipConfigured(),
+        chip_duitnow_qr: isChipConfigured(),
       },
-      payhalalMode: getPayHalalConfig()?.mode ?? null,
       creditBalance,
       creditHistory: creditHistory.map((c) => ({
         _id: String(c._id), type: c.type, amount: c.amount, reason: c.reason,

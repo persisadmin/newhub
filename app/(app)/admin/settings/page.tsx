@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, ArrowDown, Plus, Trash2, FlaskConical, Loader2 } from "lucide-react";
 import { Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Badge, Skeleton } from "@/components/ui";
 import type { PayHalalSelfTest } from "@/lib/services/payhalal";
+import type { ChipSelfTest } from "@/lib/services/chip";
 
 interface Provider {
   id: string;
@@ -71,6 +72,24 @@ export default function AdminLlmSettingsPage() {
   const [phTest, setPhTest] = useState<PayHalalSelfTest | null>(null);
   const [phTesting, setPhTesting] = useState(false);
   const [phError, setPhError] = useState<string | null>(null);
+  const [chipTest, setChipTest] = useState<ChipSelfTest | null>(null);
+  const [chipTesting, setChipTesting] = useState<"read" | "purchase" | null>(null);
+  const [chipError, setChipError] = useState<string | null>(null);
+
+  async function runChipTest(withPurchase: boolean) {
+    setChipTesting(withPurchase ? "purchase" : "read");
+    setChipError(null);
+    try {
+      const res = await fetch("/api/admin/chip-test", withPurchase ? { method: "POST" } : undefined);
+      const json = await res.json();
+      if (json.ok) setChipTest(json.data as ChipSelfTest);
+      else setChipError(json.error?.message ?? "Self-test failed.");
+    } catch {
+      setChipError("Could not reach the self-test endpoint.");
+    } finally {
+      setChipTesting(null);
+    }
+  }
 
   async function runPayHalalTest() {
     setPhTesting(true);
@@ -327,6 +346,71 @@ export default function AdminLlmSettingsPage() {
                   ))}
                 </div>
               </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Chip In Asia Self-Test</CardTitle>
+          <CardDescription>
+            The live payment processor. Checks the credentials against Chip&apos;s API, confirms
+            <strong> FPX (online banking) and DuitNow QR</strong> are enabled on this brand, and verifies the
+            callback public key. &quot;Read-only&quot; never creates anything; &quot;Create test purchase&quot; also
+            opens a real RM 10 checkout link to prove the flow end-to-end (nothing is charged unless you pay it).
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" onClick={() => runChipTest(false)} disabled={chipTesting !== null}>
+              {chipTesting === "read" ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />} Read-only checks
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runChipTest(true)} disabled={chipTesting !== null}>
+              {chipTesting === "purchase" ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />} Create test purchase
+            </Button>
+          </div>
+
+          {chipError && <p className="text-sm text-destructive">{chipError}</p>}
+
+          {chipTest && (
+            <div className="space-y-3 text-xs">
+              <div className="space-y-1">
+                {chipTest.steps.map((s, i) => (
+                  <p key={i} className={`flex items-start gap-2 ${s.ok ? "text-success" : "text-destructive"}`}>
+                    <span aria-hidden>{s.ok ? "✓" : "✗"}</span>
+                    <span>
+                      <span className="font-medium text-foreground">{s.label}</span>
+                      {s.detail ? ` — ${s.detail}` : ""}
+                    </span>
+                  </p>
+                ))}
+              </div>
+
+              {chipTest.methods && (
+                <div className="rounded-md border border-border p-3">
+                  <p className="font-medium">Available methods on this brand</p>
+                  <p className="mt-1 break-words font-mono text-[11px] text-muted-foreground">
+                    {chipTest.methods.available.join(", ") || "(none reported)"}
+                  </p>
+                </div>
+              )}
+
+              {chipTest.purchase?.ok && chipTest.purchase.checkoutUrl && (
+                <div className="rounded-md border border-primary/40 bg-primary/5 p-3">
+                  <p className="font-medium text-primary">Test checkout created — status {chipTest.purchase.status}</p>
+                  <a
+                    className="mt-1 block break-all font-mono text-[11px] text-primary underline"
+                    href={chipTest.purchase.checkoutUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {chipTest.purchase.checkoutUrl}
+                  </a>
+                </div>
+              )}
+
+              <p className="rounded-md bg-muted px-3 py-2">{chipTest.verdict}</p>
             </div>
           )}
         </CardContent>

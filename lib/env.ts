@@ -16,9 +16,18 @@ const schema = z.object({
   TNG_MERCHANT_ID: z.string().optional(),
   TNG_WEBHOOK_SECRET: z.string().optional(),
   TNG_MOCK_AUTO_VERIFY: z.coerce.boolean().default(false),
-  // PayHalal hosted payment gateway (FPX / cards / e-wallets). Active only when
-  // both PAYHALAL_APP_ID and PAYHALAL_APP_SECRET are set (from the merchant
-  // dashboard → Developer Tools). UAT is the safe default.
+  // CHIP In Asia (CHIP Collect) hosted checkout — FPX online banking + DuitNow
+  // QR. Active only when both CHIP_SECRET_KEY and CHIP_BRAND_ID are set
+  // (merchant portal → Developers → API keys / Brand ID).
+  CHIP_SECRET_KEY: z.string().optional(),
+  CHIP_BRAND_ID: z.string().optional(),
+  /** API base — override only for a sandbox endpoint. Defaults to the live gate. */
+  CHIP_BASE_URL: z.string().url().optional(),
+  /** Optional PEM used to verify signed callbacks; otherwise fetched + cached from GET /public_key/. */
+  CHIP_PUBLIC_KEY: z.string().optional(),
+  /** Whitelists (comma-separated) per checkout option. Defaults: fpx / duitnow_qr. */
+  CHIP_FPX_METHODS: z.string().optional(),
+  CHIP_DUITNOW_METHODS: z.string().optional(),
   PAYHALAL_APP_ID: z.string().optional(),
   /** App key from the dashboard (distinct from app id) — used only in the reconciliation hash. */
   PAYHALAL_APP_KEY: z.string().optional(),
