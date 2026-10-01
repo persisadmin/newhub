@@ -5,7 +5,6 @@ import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { getDb, ensureIndexes } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle, StatusBadge, Button, EmptyState } from "@/components/ui";
-import { ScanButton } from "@/components/scan-button";
 
 export const dynamic = "force-dynamic";
 
@@ -58,7 +57,7 @@ export default async function DashboardPage() {
           <h1 className="text-2xl font-bold tracking-tight">Overview</h1>
           <p className="text-sm text-muted-foreground">Your tender workspace at a glance.</p>
         </div>
-        <div className="flex gap-2"><ScanButton label="Scan Tender" /><Link href="/projects/new"><Button>New Project <ArrowRight size={14} /></Button></Link></div>
+        <div className="flex gap-2"><Link href="/projects/new"><Button>New Project <ArrowRight size={14} /></Button></Link></div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
