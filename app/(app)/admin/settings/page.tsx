@@ -356,8 +356,9 @@ export default function AdminLlmSettingsPage() {
           <CardTitle className="text-base">Chip In Asia Self-Test</CardTitle>
           <CardDescription>
             The live payment processor. Checks the credentials against Chip&apos;s API, confirms
-            <strong> FPX (online banking) and DuitNow QR</strong> are enabled on this brand, and verifies the
-            callback public key. &quot;Read-only&quot; never creates anything; &quot;Create test purchase&quot; also
+            <strong> online banking (FPX)</strong> is enabled on this brand, and verifies the
+            callback public key. (DuitNow QR is also reported, but isn&apos;t offered at checkout.)
+            &quot;Read-only&quot; never creates anything; &quot;Create test purchase&quot; also
             opens a real RM 10 checkout link to prove the flow end-to-end (nothing is charged unless you pay it).
           </CardDescription>
         </CardHeader>

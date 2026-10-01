@@ -28,7 +28,7 @@ const sections: LegalSection[] = [
     heading: "Payments",
     body: (
       <>
-        <p><strong>How do I pay?</strong> Choose a package in Settings, then pick <strong>Online banking (FPX)</strong> or <strong>DuitNow QR</strong>. You&apos;ll be taken to our secure payment page (Chip In Asia) to approve the FPX payment in your bank app or scan the QR with any Malaysian banking app or e-wallet. You always pay exactly the listed package price, and your credits activate automatically within seconds of the payment completing.</p>
+        <p><strong>How do I pay?</strong> Choose a package in Settings and you&apos;ll be taken to our secure payment page (Chip In Asia) to pay by <strong>online banking (FPX)</strong> — Maybank2u, CIMB Clicks, Bank Islam and the other Malaysian banks. You always pay exactly the listed package price, and your credits activate automatically within seconds of the payment completing.</p>
         <p><strong>I paid but my credits haven&apos;t arrived.</strong> Activation is usually under a minute. If it takes longer, keep your payment confirmation and contact us — we can confirm and activate it manually from the admin panel right away.</p>
       </>
     ),

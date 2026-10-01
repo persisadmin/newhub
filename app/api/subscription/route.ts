@@ -23,10 +23,9 @@ export async function GET() {
     return ok({
       subscription: subscription ? { ...subscription, _id: String(subscription._id), userId: String(subscription.userId) } : null,
       subscriptionActive: active !== null,
-      /** Checkout methods available to the customer (Chip In Asia). */
+      /** Checkout method available to the customer — Chip FPX online banking. */
       paymentMethods: {
         chip_fpx: isChipConfigured(),
-        chip_duitnow_qr: isChipConfigured(),
       },
       creditBalance,
       creditHistory: creditHistory.map((c) => ({

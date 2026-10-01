@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useSession } from "next-auth/react";
-import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Modal, Skeleton, Spinner, StatusBadge } from "@/components/ui";
+import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Skeleton, Spinner, StatusBadge } from "@/components/ui";
 import { formatMYR } from "@/lib/utils";
 import { PACKAGE_LIST, type PackageKey } from "@/lib/packages";
 
@@ -48,11 +48,9 @@ export default function SettingsPage() {
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [creditBalance, setCreditBalance] = useState<number>(0);
   const [creditHistory, setCreditHistory] = useState<CreditEntry[] | null>(null);
-  /** Checkout methods the server can actually take right now (Chip In Asia). */
-  const [payMethods, setPayMethods] = useState<{ chip_fpx: boolean; chip_duitnow_qr: boolean }>({ chip_fpx: false, chip_duitnow_qr: false });
-  /** Plan key the customer picked, while they choose how to pay. */
-  const [payMethodFor, setPayMethodFor] = useState<string | null>(null);
-  /** Which method's checkout is being started (for the spinner). */
+  /** Online banking (Chip FPX) is the only payment method offered. */
+  const [payMethods, setPayMethods] = useState<{ chip_fpx: boolean }>({ chip_fpx: false });
+  /** Which checkout is being started (for the spinner). */
   const [payStarting, setPayStarting] = useState<string | null>(null);
   const [payError, setPayError] = useState<string | null>(null);
   const [returnNotice, setReturnNotice] = useState<string | null>(null);
@@ -121,36 +119,32 @@ export default function SettingsPage() {
     return () => clearInterval(timer);
   }, []);
 
-  /** Customer picked a plan: if both methods work, ask which one; else go straight. */
+  /** Customer picked a plan: start the online-banking checkout. */
   function choosePayment(plan: string) {
     setError(null);
     setPayError(null);
-    const available = (["chip_fpx", "chip_duitnow_qr"] as const).filter((m) => payMethods[m]);
-    if (loaded && available.length === 0) {
+    if (loaded && !payMethods.chip_fpx) {
       setError("Online payment is temporarily unavailable. Please try again shortly or contact support.");
       return;
     }
-    if (available.length === 1) { startPayment(plan, available[0]); return; }
-    setPayMethodFor(plan);
+    startPayment(plan);
   }
 
-  async function startPayment(plan: string, method: "chip_fpx" | "chip_duitnow_qr") {
+  async function startPayment(plan: string) {
     setError(null);
     setPayError(null);
-    setPayStarting(method);
+    setPayStarting(plan);
     try {
       const res = await fetch("/api/payments/initiate", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method }),
+        body: JSON.stringify({ plan, interval: "monthly", couponCode: couponApplied ?? undefined, method: "chip_fpx" }),
       });
       const json = await res.json().catch(() => null);
       if (!json?.ok) {
-        // Keep the chooser open so the failure is visible, not a silent dead click.
         setPayError(json?.error?.message ?? "Could not start the payment. Please try again.");
         if (["NOT_FOUND", "INACTIVE", "EXHAUSTED", "NOT_STARTED", "EXPIRED", "NOT_ELIGIBLE"].includes(json?.error?.code)) setCouponApplied(null);
         return;
       }
-      setPayMethodFor(null);
       // Chip's checkout_url is a plain GET page — hand the browser over to it.
       if (json.data?.redirectUrl) { window.location.href = json.data.redirectUrl; return; }
       setPayError("The payment page could not be opened. Please try again.");
@@ -249,9 +243,10 @@ export default function SettingsPage() {
                   <Button
                     className="mt-4 w-full"
                     variant={current ? "outline" : "default"}
-                    disabled={!!payStarting || payMethodFor === p.key}
+                    disabled={!!payStarting}
                     onClick={() => choosePayment(p.key)}
                   >
+                    {payStarting === p.key && <Spinner />}
                     {subscriptionActive ? "Top up" : "Subscribe"}
                   </Button>
                 </CardContent>
@@ -330,70 +325,6 @@ export default function SettingsPage() {
         )}
       </div>
 
-      {/* Payment method chooser (Chip In Asia) */}
-      <Modal open={!!payMethodFor} onClose={() => { if (!payStarting) { setPayMethodFor(null); setPayError(null); } }} title="How would you like to pay?">
-        {payMethodFor && (() => {
-          const pkg = PACKAGES.find((p) => p.key === payMethodFor);
-          return (
-            <div className="space-y-4">
-              {pkg && (
-                <p className="text-sm text-muted-foreground">
-                  {pkg.name} package · <span className="font-medium text-foreground">{formatMYR(pkg.price)}</span>
-                  {couponApplied && <span className="ml-1">· coupon {couponApplied} applied</span>}
-                </p>
-              )}
-
-              {!loaded && (
-                <div className="flex justify-center py-3"><Spinner /></div>
-              )}
-
-              {payError && (
-                <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{payError}</p>
-              )}
-
-              {payMethods.chip_fpx && (
-                <button
-                  onClick={() => startPayment(payMethodFor, "chip_fpx")}
-                  disabled={!!payStarting}
-                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="flex items-center gap-2 font-medium">
-                    {payStarting === "chip_fpx" && <Spinner />}
-                    Online banking (FPX)
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Pay from your bank account via FPX on Chip&apos;s secure page — Maybank2u, CIMB Clicks, Bank Islam
-                    and the other Malaysian banks.
-                  </p>
-                </button>
-              )}
-
-              {payMethods.chip_duitnow_qr && (
-                <button
-                  onClick={() => startPayment(payMethodFor, "chip_duitnow_qr")}
-                  disabled={!!payStarting}
-                  className="w-full cursor-pointer rounded-lg border border-border bg-card p-4 text-left transition-colors hover:border-primary disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  <p className="flex items-center gap-2 font-medium">
-                    {payStarting === "chip_duitnow_qr" && <Spinner />}
-                    DuitNow QR
-                  </p>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Scan a QR with any Malaysian banking app or e-wallet (Touch &apos;n Go, GrabPay, MAE, Boost…) on
-                    Chip&apos;s secure page.
-                  </p>
-                </button>
-              )}
-
-              {loaded && !payMethods.chip_fpx && !payMethods.chip_duitnow_qr && (
-                <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                  No payment method is available right now. Please try again shortly or contact support.
-                </p>
-              )}
-            </div>
-          );
-        })()}
-      </Modal>
     </div>
   );
 }
