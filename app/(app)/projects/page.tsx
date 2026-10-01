@@ -3,7 +3,6 @@ import { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { Plus, Search, Archive, Trash2 } from "lucide-react";
 import { Button, Input, StatusBadge, Skeleton, EmptyState, Modal } from "@/components/ui";
-import { ScanButton } from "@/components/scan-button";
 
 interface Project {
   _id: string;
@@ -61,7 +60,7 @@ export default function ProjectsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Projects</h1>
           <p className="text-sm text-muted-foreground">Create, search and manage your tender projects.</p>
         </div>
-        <div className="flex gap-2"><ScanButton label="Scan Tender" /><Link href="/projects/new"><Button><Plus size={14} /> New Project</Button></Link></div>
+        <div className="flex gap-2"><Link href="/projects/new"><Button><Plus size={14} /> New Project</Button></Link></div>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
