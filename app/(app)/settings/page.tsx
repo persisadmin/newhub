@@ -86,6 +86,12 @@ export default function SettingsPage() {
     if (gateway !== "payhalal" && gateway !== "chip") return;
     const order = params.get("order");
     const label = gateway === "chip" ? "Chip" : "PayHalal";
+    // Failure/cancel return: the gateway already told us the outcome — don't poll.
+    if (params.get("result") === "failure") {
+      setReturnNotice("The payment was not completed — no charge was made. You can try again below whenever you're ready.");
+      window.history.replaceState({}, "", window.location.pathname);
+      return;
+    }
     setReturnNotice(`Confirming your ${label} payment…`);
     // Drop the query string so a refresh doesn't re-run this.
     window.history.replaceState({}, "", window.location.pathname);
@@ -246,7 +252,6 @@ export default function SettingsPage() {
                     disabled={!!payStarting || payMethodFor === p.key}
                     onClick={() => choosePayment(p.key)}
                   >
-                    {payMethodFor === p.key && !payStarting && <Spinner />}
                     {subscriptionActive ? "Top up" : "Subscribe"}
                   </Button>
                 </CardContent>
@@ -338,6 +343,10 @@ export default function SettingsPage() {
                 </p>
               )}
 
+              {!loaded && (
+                <div className="flex justify-center py-3"><Spinner /></div>
+              )}
+
               {payError && (
                 <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{payError}</p>
               )}
@@ -376,7 +385,7 @@ export default function SettingsPage() {
                 </button>
               )}
 
-              {!payMethods.chip_fpx && !payMethods.chip_duitnow_qr && (
+              {loaded && !payMethods.chip_fpx && !payMethods.chip_duitnow_qr && (
                 <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
                   No payment method is available right now. Please try again shortly or contact support.
                 </p>
