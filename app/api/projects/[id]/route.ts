@@ -18,6 +18,11 @@ const patchSchema = z.object({
   regionKumpulan: z.enum(["A", "B", "C", "D"]).nullable().optional(),
   profitMarginPct: z.coerce.number().min(0).max(100).nullable().optional(),
   contingencyPct: z.coerce.number().min(0).max(100).nullable().optional(),
+  tenderParams: z.object({
+    durationDays: z.coerce.number().int().min(0).max(10000).nullable().optional(),
+    workerCount: z.coerce.number().int().min(0).max(100000).nullable().optional(),
+    laborRatePerDay: z.coerce.number().min(0).max(100000).nullable().optional(),
+  }).nullable().optional(),
   archive: z.boolean().optional(),
 });
 
@@ -62,6 +67,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (body.regionKumpulan !== undefined) update.regionKumpulan = body.regionKumpulan ?? undefined;
     if (body.profitMarginPct !== undefined) update.profitMarginPct = body.profitMarginPct ?? null;
     if (body.contingencyPct !== undefined) update.contingencyPct = body.contingencyPct ?? null;
+    if (body.tenderParams !== undefined) update.tenderParams = body.tenderParams ?? null;
     if (body.archive !== undefined) {
       update.status = body.archive ? "archived" : "draft";
       update.archivedAt = body.archive ? new Date() : undefined;

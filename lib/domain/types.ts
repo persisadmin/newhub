@@ -53,6 +53,15 @@ export interface ProjectDoc {
   /** Contingency sum (%) applied on top of cost, before the profit margin.
    *  Tender price = selectedPrice × (1 + contingency/100) × (1 + margin/100). */
   contingencyPct?: number | null;
+  /** Parameters for the post-processing Price Breakdown & Tender Sum panel. */
+  tenderParams?: {
+    /** Project duration in working days (drives direct site labour cost). */
+    durationDays?: number | null;
+    /** Number of general workers on site. */
+    workerCount?: number | null;
+    /** Daily wage per worker (RM), e.g. from CIDB construction wage rates. */
+    laborRatePerDay?: number | null;
+  };
   currentStage?: PipelineStage;
   stageUpdatedAt?: Date;
   processingError?: string;

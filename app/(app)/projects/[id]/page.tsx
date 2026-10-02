@@ -4,6 +4,7 @@ import { UploadCloud, Play, Square, FileText, CheckCircle2, Circle, Loader2, Fla
 import { Button, Card, CardContent, CardHeader, CardTitle, CardDescription, Badge, StatusBadge, Skeleton, Modal, Input, Label, EmptyState } from "@/components/ui";
 import { formatPrice } from "@/lib/utils";
 import { tenderUplift, tenderBreakdown } from "@/lib/pricing";
+import { computeTenderSum, ringgitInWords } from "@/lib/tender-sum";
 import { ScanButton } from "@/components/scan-button";
 import { StrategyBriefing } from "@/components/strategy-briefing";
 
@@ -25,6 +26,7 @@ interface ProjectData {
     regionState?: string; regionDistrict?: string; regionKumpulan?: string;
     profitMarginPct?: number | null;
     contingencyPct?: number | null;
+    tenderParams?: { durationDays?: number | null; workerCount?: number | null; laborRatePerDay?: number | null } | null;
     strategyNarrative?: string; strategyNarrativeAt?: string; strategyAudioParts?: number;
   };
   documents: Doc[];
@@ -332,6 +334,16 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
             </div>
           )}
           <PricingTable pricing={pricing} marginPct={data.project.profitMarginPct} contingencyPct={data.project.contingencyPct} onOverride={setOverrideTarget} />
+          {project.status === "completed" && pricing && pricing.length > 0 && (
+            <TenderSumPanel
+              projectId={id}
+              pricing={pricing}
+              marginPct={data.project.profitMarginPct}
+              contingencyPct={data.project.contingencyPct}
+              tenderParams={data.project.tenderParams}
+              onSaved={(patch) => setData((d) => d ? { ...d, project: { ...d.project, ...patch } } : d)}
+            />
+          )}
         </div>
       )}
       {tab === "review" && <PricingTable pricing={flagged} marginPct={data.project.profitMarginPct} contingencyPct={data.project.contingencyPct} onOverride={setOverrideTarget} reviewMode />}
@@ -588,6 +600,154 @@ function PctField({ id, label, value, onChange, onCommit }: {
         <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted-foreground">%</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * Price Breakdown & Tender Sum — shown once processing completes. Material cost
+ * auto-sums from the BOQ material/equipment lines; labour is computed from
+ * workers × days × rate (editable). Margin is on the SELLING price
+ * (tender = total cost ÷ (1 − margin%)), per the standard tender-sum convention.
+ */
+function TenderSumPanel({ projectId, pricing, marginPct, contingencyPct, tenderParams, onSaved }: {
+  projectId: string;
+  pricing: PricingRecord[];
+  marginPct: number | null | undefined;
+  contingencyPct: number | null | undefined;
+  tenderParams: { durationDays?: number | null; workerCount?: number | null; laborRatePerDay?: number | null } | null | undefined;
+  onSaved: (patch: { tenderParams?: { durationDays?: number | null; workerCount?: number | null; laborRatePerDay?: number | null } | null }) => void;
+}) {
+  // Material & equipment cost = BOQ lines categorised as material (equipment is
+  // folded into "material"/"process" pricing categories today).
+  const materialCost = (pricing ?? [])
+    .filter((p) => p.category === "material" || p.category === "process")
+    .reduce((s, p) => s + (p.selectedPrice ?? 0) * (p.quantity ?? 1), 0);
+
+  const [days, setDays] = useState(tenderParams?.durationDays != null ? String(tenderParams.durationDays) : "");
+  const [workers, setWorkers] = useState(tenderParams?.workerCount != null ? String(tenderParams.workerCount) : "");
+  const [rate, setRate] = useState(tenderParams?.laborRatePerDay != null ? String(tenderParams.laborRatePerDay) : "150");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setDays(tenderParams?.durationDays != null ? String(tenderParams.durationDays) : ""); }, [tenderParams?.durationDays]);
+  useEffect(() => { setWorkers(tenderParams?.workerCount != null ? String(tenderParams.workerCount) : ""); }, [tenderParams?.workerCount]);
+  useEffect(() => { setRate(tenderParams?.laborRatePerDay != null ? String(tenderParams.laborRatePerDay) : "150"); }, [tenderParams?.laborRatePerDay]);
+
+  const numOrNull = (v: string) => (v.trim() === "" ? null : Number(v));
+  const daysN = numOrNull(days);
+  const workersN = numOrNull(workers);
+  const rateN = numOrNull(rate);
+
+  const sum = computeTenderSum({
+    materialCost,
+    durationDays: daysN,
+    workerCount: workersN,
+    laborRatePerDay: rateN,
+    contingencyPct: contingencyPct ?? null,
+    marginPct: marginPct ?? null,
+  });
+
+  async function saveParams() {
+    setSaving(true);
+    const patch = { tenderParams: { durationDays: daysN, workerCount: workersN, laborRatePerDay: rateN } };
+    await fetch(`/api/projects/${projectId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    setSaving(false);
+    onSaved(patch);
+  }
+
+  const fmt = (n: number) => `RM${n.toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Price Breakdown &amp; Tender Sum</CardTitle>
+        <CardDescription>A high-level bid price built from direct cost, contingency and your target margin.</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-6">
+        {/* Labour parameters */}
+        <div className="rounded-md border border-border p-4">
+          <p className="mb-3 text-sm font-medium">Direct site labour</p>
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="ts-workers" className="text-xs">General workers</Label>
+              <Input id="ts-workers" type="number" min={0} step={1} value={workers} onChange={(e) => setWorkers(e.target.value)} onBlur={saveParams} className="w-28 text-right" placeholder="0" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ts-days" className="text-xs">Duration (days)</Label>
+              <Input id="ts-days" type="number" min={0} step={1} value={days} onChange={(e) => setDays(e.target.value)} onBlur={saveParams} className="w-28 text-right" placeholder="0" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ts-rate" className="text-xs">Rate / day (RM)</Label>
+              <Input id="ts-rate" type="number" min={0} step={1} value={rate} onChange={(e) => setRate(e.target.value)} onBlur={saveParams} className="w-28 text-right" placeholder="150" />
+            </div>
+            {saving && <Loader2 size={14} className="mb-2 animate-spin text-muted-foreground" />}
+          </div>
+          <p className="mt-2 text-xs text-muted-foreground">Daily wage defaults to RM150 — update it from the CIDB construction wage rates for the trade and state.</p>
+        </div>
+
+        {/* Breakdown */}
+        <div className="space-y-4 text-sm">
+          <section>
+            <h4 className="mb-1 font-semibold">1. Direct Project Costs</h4>
+            <ul className="space-y-1 pl-2">
+              <li className="flex justify-between gap-4"><span className="text-muted-foreground">1.1 Base material &amp; equipment cost</span><span className="font-medium">{fmt(sum.materialCost)}</span></li>
+              <li className="flex justify-between gap-4">
+                <span className="text-muted-foreground">1.2 Direct site labour cost
+                  <span className="block text-xs">({workersN ?? 0} workers × {daysN ?? 0} days × {fmt(rateN ?? 0)}/day)</span>
+                </span>
+                <span className="font-medium">{fmt(sum.laborCost)}</span>
+              </li>
+              {(contingencyPct ?? 0) > 0 && (
+                <li className="flex justify-between gap-4">
+                  <span className="text-muted-foreground">1.3 Contingency sum ({contingencyPct}%)
+                    <span className="block text-xs">({contingencyPct}% of {fmt(sum.baseDirectCost)} base direct costs)</span>
+                  </span>
+                  <span className="font-medium">{fmt(sum.contingencyAmount)}</span>
+                </li>
+              )}
+              <li className="flex justify-between gap-4 border-t border-border pt-1"><span className="font-medium">Total estimated project cost</span><span className="font-semibold">{fmt(sum.totalCost)}</span></li>
+            </ul>
+          </section>
+
+          <section>
+            <h4 className="mb-1 font-semibold">2. Margin &amp; Profit Realisation</h4>
+            <ul className="space-y-1 pl-2">
+              <li className="flex justify-between gap-4"><span className="text-muted-foreground">2.1 Gross profit margin target</span><span className="font-medium">{(marginPct ?? 0).toFixed(2)}%</span></li>
+              <li className="flex justify-between gap-4">
+                <span className="text-muted-foreground">2.2 Profit allocation
+                  {(marginPct ?? 0) > 0 && <span className="block text-xs">({fmt(sum.totalCost)} ÷ {((100 - (marginPct ?? 0)) / 100).toFixed(2)} − {fmt(sum.totalCost)})</span>}
+                </span>
+                <span className="font-medium">{fmt(sum.profitAmount)}</span>
+              </li>
+            </ul>
+          </section>
+        </div>
+
+        {/* Summary table */}
+        <div className="overflow-hidden rounded-lg border border-border">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
+              <tr><th className="px-4 py-2 font-medium">Item</th><th className="px-4 py-2 text-right font-medium">Amount (RM)</th></tr>
+            </thead>
+            <tbody className="divide-y divide-border bg-card">
+              <tr><td className="px-4 py-2">Total base direct costs (material + labour)</td><td className="px-4 py-2 text-right tabular-nums">{sum.baseDirectCost.toLocaleString("en-MY", { minimumFractionDigits: 2 })}</td></tr>
+              <tr><td className="px-4 py-2">Contingency provision ({contingencyPct ?? 0}%)</td><td className="px-4 py-2 text-right tabular-nums">{sum.contingencyAmount.toLocaleString("en-MY", { minimumFractionDigits: 2 })}</td></tr>
+              <tr><td className="px-4 py-2">Total estimated project cost</td><td className="px-4 py-2 text-right tabular-nums">{sum.totalCost.toLocaleString("en-MY", { minimumFractionDigits: 2 })}</td></tr>
+              <tr><td className="px-4 py-2">Gross margin allocation ({(marginPct ?? 0).toFixed(0)}%)</td><td className="px-4 py-2 text-right tabular-nums">{sum.profitAmount.toLocaleString("en-MY", { minimumFractionDigits: 2 })}</td></tr>
+              <tr className="bg-primary/5 font-semibold"><td className="px-4 py-2.5">TOTAL TENDER BID PRICE</td><td className="px-4 py-2.5 text-right tabular-nums">{sum.tenderBid.toLocaleString("en-MY", { minimumFractionDigits: 2 })}</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p className="rounded-md bg-muted px-3 py-2 text-sm">
+          <span className="font-medium">Total Tender Sum Written in Words:</span>{" "}
+          <span className="italic">{ringgitInWords(sum.tenderBid)}</span>
+        </p>
+      </CardContent>
+    </Card>
   );
 }
 
