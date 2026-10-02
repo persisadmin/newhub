@@ -17,6 +17,7 @@ const patchSchema = z.object({
   regionDistrict: z.string().max(120).nullable().optional(),
   regionKumpulan: z.enum(["A", "B", "C", "D"]).nullable().optional(),
   profitMarginPct: z.coerce.number().min(0).max(100).nullable().optional(),
+  contingencyPct: z.coerce.number().min(0).max(100).nullable().optional(),
   archive: z.boolean().optional(),
 });
 
@@ -60,6 +61,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     if (body.regionDistrict !== undefined) update.regionDistrict = body.regionDistrict ?? undefined;
     if (body.regionKumpulan !== undefined) update.regionKumpulan = body.regionKumpulan ?? undefined;
     if (body.profitMarginPct !== undefined) update.profitMarginPct = body.profitMarginPct ?? null;
+    if (body.contingencyPct !== undefined) update.contingencyPct = body.contingencyPct ?? null;
     if (body.archive !== undefined) {
       update.status = body.archive ? "archived" : "draft";
       update.archivedAt = body.archive ? new Date() : undefined;

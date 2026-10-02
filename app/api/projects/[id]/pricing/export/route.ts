@@ -45,13 +45,14 @@ export async function GET(_req: Request, ctx: Ctx) {
     });
 
     const marginPct = (project.profitMarginPct as number | null | undefined) ?? null;
-    const built = await buildPricedBoqXlsx(rows, project.tenderTitle || project.name, marginPct);
+    const contingencyPct = (project.contingencyPct as number | null | undefined) ?? null;
+    const built = await buildPricedBoqXlsx(rows, project.tenderTitle || project.name, marginPct, contingencyPct);
     await audit({
       userId: new ObjectId(user.id),
       action: "pricing.exported",
       entityType: "project",
       entityId: project._id,
-      newValue: { rows: rows.length, filename: built.filename, profitMarginPct: marginPct },
+      newValue: { rows: rows.length, filename: built.filename, profitMarginPct: marginPct, contingencyPct },
       source: "api",
     });
 

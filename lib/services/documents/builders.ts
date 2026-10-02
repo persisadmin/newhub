@@ -2,6 +2,7 @@ import ExcelJS from "exceljs";
 import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
 import PDFDocument from "pdfkit";
 import type { CategorizedBoq } from "@/lib/services/llm/document-generators";
+import { tenderUplift, tenderBreakdown } from "@/lib/pricing";
 
 /**
  * File builders for generated tender deliverables.
@@ -53,9 +54,11 @@ export interface PricedRow {
 export async function buildPricedBoqXlsx(
   rows: PricedRow[],
   projectTitle: string,
-  profitMarginPct: number | null = null
+  profitMarginPct: number | null = null,
+  contingencyPct: number | null = null
 ): Promise<BuiltFile> {
-  const uplift = profitMarginPct != null && profitMarginPct > 0 ? 1 + profitMarginPct / 100 : null;
+  // Tender rate = cost × (1 + contingency%) × (1 + margin%); cost rate stays internal.
+  const uplift = tenderUplift(profitMarginPct, contingencyPct);
   const wb = new ExcelJS.Workbook();
   wb.creator = "PERSIS";
   const ws = wb.addWorksheet("Priced BOQ");
@@ -103,12 +106,14 @@ export async function buildPricedBoqXlsx(
   }
 
   if (uplift != null && total > 0) {
-    const costTotal = Math.round((total / uplift) * 100) / 100;
-    const marginAmount = Math.round((total - costTotal) * 100) / 100;
-    const costRow = ws.addRow({ description: "COST SUBTOTAL (before margin)", amount: costTotal });
-    costRow.getCell("amount").numFmt = "#,##0.00";
-    const marginRow = ws.addRow({ description: `PROFIT MARGIN (${profitMarginPct}%)`, amount: marginAmount });
-    marginRow.getCell("amount").numFmt = "#,##0.00";
+    const bd = tenderBreakdown(Math.round((total / uplift) * 100) / 100, profitMarginPct, contingencyPct);
+    const addSummaryRow = (label: string, amount: number) => {
+      const r = ws.addRow({ description: label, amount: Math.round(amount * 100) / 100 });
+      r.getCell("amount").numFmt = "#,##0.00";
+    };
+    addSummaryRow("COST SUBTOTAL", bd.cost);
+    if (bd.contingencyAmount > 0) addSummaryRow(`CONTINGENCY SUM (${contingencyPct}%)`, bd.contingencyAmount);
+    if (bd.marginAmount > 0) addSummaryRow(`PROFIT MARGIN (${profitMarginPct}%)`, bd.marginAmount);
   }
   const totalRow = ws.addRow({ description: "TENDER TOTAL (excluding prelims)", amount: Math.round(total * 100) / 100 });
   totalRow.font = { bold: true };

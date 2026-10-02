@@ -13,6 +13,8 @@ const createSchema = z.object({
   regionState: z.string().max(60).optional(),
   regionDistrict: z.string().max(120).optional(),
   regionKumpulan: z.enum(["A", "B", "C", "D"]).optional(),
+  profitMarginPct: z.coerce.number().min(0).max(100).nullable().optional(),
+  contingencyPct: z.coerce.number().min(0).max(100).nullable().optional(),
 });
 
 export async function GET(req: Request) {
@@ -50,6 +52,8 @@ export async function POST(req: Request) {
       regionState: body.regionState,
       regionDistrict: body.regionDistrict,
       regionKumpulan: body.regionKumpulan,
+      profitMarginPct: body.profitMarginPct ?? null,
+      contingencyPct: body.contingencyPct ?? null,
       status: "draft",
       createdAt: now,
       updatedAt: now,

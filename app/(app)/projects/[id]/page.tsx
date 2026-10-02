@@ -3,6 +3,7 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 import { UploadCloud, Play, Square, FileText, CheckCircle2, Circle, Loader2, Flag, Download, Eye } from "lucide-react";
 import { Button, Card, CardContent, CardHeader, CardTitle, CardDescription, Badge, StatusBadge, Skeleton, Modal, Input, Label, EmptyState } from "@/components/ui";
 import { formatPrice } from "@/lib/utils";
+import { tenderUplift, tenderBreakdown } from "@/lib/pricing";
 import { ScanButton } from "@/components/scan-button";
 import { StrategyBriefing } from "@/components/strategy-briefing";
 
@@ -23,6 +24,7 @@ interface ProjectData {
     tenderTitle?: string; tenderNumber?: string; tenderAgency?: string; tenderCategory?: string; closingDate?: string;
     regionState?: string; regionDistrict?: string; regionKumpulan?: string;
     profitMarginPct?: number | null;
+    contingencyPct?: number | null;
     strategyNarrative?: string; strategyNarrativeAt?: string; strategyAudioParts?: number;
   };
   documents: Doc[];
@@ -318,8 +320,9 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
           <MarginBar
             projectId={id}
             marginPct={data.project.profitMarginPct}
+            contingencyPct={data.project.contingencyPct}
             pricing={pricing}
-            onSaved={(pct) => setData((d) => d ? { ...d, project: { ...d.project, profitMarginPct: pct } } : d)}
+            onSaved={(patch) => setData((d) => d ? { ...d, project: { ...d.project, ...patch } } : d)}
           />
           {pricing && pricing.length > 0 && (
             <div className="flex justify-end">
@@ -328,10 +331,10 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
               </a>
             </div>
           )}
-          <PricingTable pricing={pricing} marginPct={data.project.profitMarginPct} onOverride={setOverrideTarget} />
+          <PricingTable pricing={pricing} marginPct={data.project.profitMarginPct} contingencyPct={data.project.contingencyPct} onOverride={setOverrideTarget} />
         </div>
       )}
-      {tab === "review" && <PricingTable pricing={flagged} marginPct={data.project.profitMarginPct} onOverride={setOverrideTarget} reviewMode />}
+      {tab === "review" && <PricingTable pricing={flagged} marginPct={data.project.profitMarginPct} contingencyPct={data.project.contingencyPct} onOverride={setOverrideTarget} reviewMode />}
       {tab === "history" && <JobHistory jobs={data.jobs} />}
 
       <OverrideModal
@@ -452,117 +455,160 @@ function BoqTable({ items }: { items: BoqItem[] }) {
   );
 }
 
-/** Profit margin editor + live totals: cost → margin → tender price. */
-function MarginBar({ projectId, marginPct, pricing, onSaved }: {
+/** Contingency + profit margin editor with live totals: cost → contingency → margin → tender. */
+function MarginBar({ projectId, marginPct, contingencyPct, pricing, onSaved }: {
   projectId: string;
   marginPct: number | null | undefined;
+  contingencyPct: number | null | undefined;
   pricing: PricingRecord[] | null;
-  onSaved: (pct: number | null) => void;
+  onSaved: (patch: { profitMarginPct?: number | null; contingencyPct?: number | null }) => void;
 }) {
-  const [value, setValue] = useState(marginPct != null ? String(marginPct) : "");
+  const [marginValue, setMarginValue] = useState(marginPct != null ? String(marginPct) : "");
+  const [contValue, setContValue] = useState(contingencyPct != null ? String(contingencyPct) : "");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
-  // Keep the input in sync if the project reloads with a different value.
-  useEffect(() => { setValue(marginPct != null ? String(marginPct) : ""); }, [marginPct]);
+  // Keep inputs in sync if the project reloads with different values.
+  useEffect(() => { setMarginValue(marginPct != null ? String(marginPct) : ""); }, [marginPct]);
+  useEffect(() => { setContValue(contingencyPct != null ? String(contingencyPct) : ""); }, [contingencyPct]);
 
-  const parsed = value.trim() === "" ? null : Number(value);
-  const valid = parsed === null || (Number.isFinite(parsed) && parsed >= 0 && parsed <= 100);
+  const margin = marginValue.trim() === "" ? null : Number(marginValue);
+  const contingency = contValue.trim() === "" ? null : Number(contValue);
+  const marginValid = margin === null || (Number.isFinite(margin) && margin >= 0 && margin <= 100);
+  const contValid = contingency === null || (Number.isFinite(contingency) && contingency >= 0 && contingency <= 100);
 
-  async function save(pct: number | null) {
+  async function saveField(field: "profitMarginPct" | "contingencyPct", pct: number | null) {
     setSaving(true);
     setSaveError(null);
     const res = await fetch(`/api/projects/${projectId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ profitMarginPct: pct }),
+      body: JSON.stringify({ [field]: pct }),
     });
     const json = await res.json();
     setSaving(false);
-    if (!json.ok) { setSaveError(json.error?.message ?? "Could not save margin."); return; }
-    onSaved(pct);
+    if (!json.ok) { setSaveError(json.error?.message ?? "Could not save."); return; }
+    onSaved({ [field]: pct });
   }
 
   const cost = (pricing ?? []).reduce((s, p) => s + (p.selectedPrice ?? 0) * (p.quantity ?? 1), 0);
-  const marginAmount = parsed != null && valid ? (cost * parsed) / 100 : 0;
-  const tender = cost + marginAmount;
+  const showBreakdown = (margin != null && marginValid) || (contingency != null && contValid);
+  const bd = tenderBreakdown(
+    cost,
+    margin != null && marginValid ? margin : null,
+    contingency != null && contValid ? contingency : null
+  );
 
   return (
     <div className="rounded-lg border border-border bg-card p-4">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
-        <div className="flex items-center gap-2">
-          <Label htmlFor="profit-margin" className="whitespace-nowrap text-sm font-medium">Profit margin</Label>
-          <div className="relative">
-            <Input
-              id="profit-margin"
-              type="number"
-              min={0}
-              max={100}
-              step={0.5}
-              placeholder="0"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              onBlur={() => { if (valid && parsed !== (marginPct ?? null)) save(parsed); }}
-              className="w-24 pr-7 text-right"
-            />
-            <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted-foreground">%</span>
-          </div>
-          {saving && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
-        </div>
+        <PctField
+          id="contingency"
+          label="Contingency"
+          value={contValue}
+          onChange={setContValue}
+          onCommit={(v) => { if (contValid && v !== (contingencyPct ?? null)) saveField("contingencyPct", v); }}
+        />
+        <PctField
+          id="profit-margin"
+          label="Profit margin"
+          value={marginValue}
+          onChange={setMarginValue}
+          onCommit={(v) => { if (marginValid && v !== (marginPct ?? null)) saveField("profitMarginPct", v); }}
+        />
         <div className="flex gap-1.5">
           {[5, 10, 15, 20].map((p) => (
             <button
               key={p}
-              onClick={() => { setValue(String(p)); save(p); }}
-              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${parsed === p ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
+              onClick={() => { setMarginValue(String(p)); saveField("profitMarginPct", p); }}
+              className={`rounded-full border px-2.5 py-1 text-xs font-medium transition-colors cursor-pointer ${margin === p ? "border-primary bg-primary/10 text-primary" : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"}`}
             >
               {p}%
             </button>
           ))}
-          {parsed != null && (
+          {(margin != null || contingency != null) && (
             <button
-              onClick={() => { setValue(""); save(null); }}
+              onClick={() => {
+                setMarginValue(""); setContValue("");
+                saveField("profitMarginPct", null);
+                saveField("contingencyPct", null);
+              }}
               className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
             >
               Clear
             </button>
           )}
         </div>
+        {saving && <Loader2 size={14} className="animate-spin text-muted-foreground" />}
         {pricing && pricing.length > 0 && (
           <div className="ml-auto flex flex-wrap items-baseline gap-x-4 gap-y-1 text-sm">
-            <span className="text-muted-foreground">Cost <span className="font-medium text-foreground">{formatPrice(Math.round(cost * 100) / 100)}</span></span>
-            {parsed != null && valid && (
-              <>
-                <span className="text-muted-foreground">+ Margin {parsed}% <span className="font-medium text-foreground">{formatPrice(Math.round(marginAmount * 100) / 100)}</span></span>
-                <span className="text-base font-semibold">Tender {formatPrice(Math.round(tender * 100) / 100)}</span>
-              </>
+            <span className="text-muted-foreground">Cost <span className="font-medium text-foreground">{formatPrice(Math.round(bd.cost * 100) / 100)}</span></span>
+            {contingency != null && contValid && (
+              <span className="text-muted-foreground">+ Contingency {contingency}% <span className="font-medium text-foreground">{formatPrice(Math.round(bd.contingencyAmount * 100) / 100)}</span></span>
+            )}
+            {margin != null && marginValid && (
+              <span className="text-muted-foreground">+ Margin {margin}% <span className="font-medium text-foreground">{formatPrice(Math.round(bd.marginAmount * 100) / 100)}</span></span>
+            )}
+            {showBreakdown && (
+              <span className="text-base font-semibold">Tender {formatPrice(Math.round(bd.tender * 100) / 100)}</span>
             )}
           </div>
         )}
       </div>
       {saveError && <p role="alert" className="mt-2 text-sm text-destructive">{saveError}</p>}
-      {!valid && <p role="alert" className="mt-2 text-sm text-destructive">Margin must be between 0 and 100%.</p>}
+      {!marginValid && <p role="alert" className="mt-2 text-sm text-destructive">Profit margin must be between 0 and 100%.</p>}
+      {!contValid && <p role="alert" className="mt-2 text-sm text-destructive">Contingency must be between 0 and 100%.</p>}
       <p className="mt-2 text-xs text-muted-foreground">
-        Markup on cost: tender price = selected cost price × (1 + margin%). 10% markup ≈ 9.1% margin on selling price.
+        Tender price = cost × (1 + contingency%) × (1 + margin%). Contingency covers unforeseen costs; margin is your markup on top.
       </p>
     </div>
   );
 }
 
-function PricingTable({ pricing, marginPct = null, onOverride, reviewMode = false }: { pricing: PricingRecord[] | null; marginPct?: number | null; onOverride: (r: PricingRecord) => void; reviewMode?: boolean }) {
+/** A labelled percentage input that commits on blur. */
+function PctField({ id, label, value, onChange, onCommit }: {
+  id: string; label: string; value: string; onChange: (v: string) => void; onCommit: (v: number | null) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <Label htmlFor={id} className="whitespace-nowrap text-sm font-medium">{label}</Label>
+      <div className="relative">
+        <Input
+          id={id}
+          type="number"
+          min={0}
+          max={100}
+          step={0.5}
+          placeholder="0"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onBlur={() => onCommit(value.trim() === "" ? null : Number(value))}
+          className="w-24 pr-7 text-right"
+        />
+        <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-sm text-muted-foreground">%</span>
+      </div>
+    </div>
+  );
+}
+
+function PricingTable({ pricing, marginPct = null, contingencyPct = null, onOverride, reviewMode = false }: { pricing: PricingRecord[] | null; marginPct?: number | null; contingencyPct?: number | null; onOverride: (r: PricingRecord) => void; reviewMode?: boolean }) {
   if (pricing === null) return <div className="space-y-3">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>;
   if (pricing.length === 0) {
     return <EmptyState title={reviewMode ? "Nothing to review" : "No pricing yet"} description={reviewMode ? "All pricing records are clear of review flags." : "Process a tender document to generate pricing."} />;
   }
   const total = pricing.reduce((s, p) => s + (p.selectedPrice ?? 0) * (p.quantity ?? 1), 0);
-  const uplift = marginPct != null ? 1 + marginPct / 100 : null;
+  const uplift = tenderUplift(marginPct, contingencyPct);
   const tenderTotal = uplift != null ? total * uplift : null;
+  const upliftLabel = [
+    contingencyPct != null && contingencyPct > 0 ? `${contingencyPct}% contingency` : null,
+    marginPct != null && marginPct > 0 ? `${marginPct}% margin` : null,
+  ].filter(Boolean).join(" + ");
   return (
     <div className="space-y-4">
       <div className="flex justify-end gap-4 text-sm">
         <p className="text-muted-foreground">Cost total: <span className="font-semibold text-foreground">{formatPrice(Math.round(total * 100) / 100)}</span></p>
         {tenderTotal != null && (
-          <p className="text-muted-foreground">Tender total (incl. {marginPct}% margin): <span className="font-semibold text-foreground">{formatPrice(Math.round(tenderTotal * 100) / 100)}</span></p>
+          <p className="text-muted-foreground">Tender total (incl. {upliftLabel}): <span className="font-semibold text-foreground">{formatPrice(Math.round(tenderTotal * 100) / 100)}</span></p>
         )}
       </div>
       <div className="overflow-x-auto rounded-lg border border-border pb-1">

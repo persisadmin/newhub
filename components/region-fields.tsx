@@ -1,7 +1,6 @@
 "use client";
-import { useState } from "react";
 import { Label } from "@/components/ui";
-import { REGION_STATES, districtsFor, KUMPULAN_LABELS, type Kumpulan } from "@/lib/regions";
+import { ALL_MALAYSIAN_TERRITORIES, districtsFor, KUMPULAN_LABELS, type Kumpulan } from "@/lib/regions";
 
 export interface RegionValue {
   regionState?: string;
@@ -32,7 +31,16 @@ export function RegionFields({ value, onChange }: { value: RegionValue; onChange
             onChange={(e) => onChange({ regionState: e.target.value || undefined })}
           >
             <option value="">—</option>
-            {REGION_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
+            <optgroup label="States">
+              {ALL_MALAYSIAN_TERRITORIES.filter((t) => !t.name.startsWith("WILAYAH")).map((t) => (
+                <option key={t.name} value={t.name}>{t.name}</option>
+              ))}
+            </optgroup>
+            <optgroup label="Federal Territories">
+              {ALL_MALAYSIAN_TERRITORIES.filter((t) => t.name.startsWith("WILAYAH")).map((t) => (
+                <option key={t.name} value={t.name}>{t.name}</option>
+              ))}
+            </optgroup>
           </select>
         </div>
         <div className="space-y-1.5">
@@ -40,7 +48,7 @@ export function RegionFields({ value, onChange }: { value: RegionValue; onChange
           <select
             id="region-district"
             className={selectCls}
-            disabled={!value.regionState}
+            disabled={!value.regionState || districts.length === 0}
             value={value.regionDistrict ?? ""}
             onChange={(e) => onChange({ ...value, regionDistrict: e.target.value || undefined })}
           >
@@ -53,7 +61,7 @@ export function RegionFields({ value, onChange }: { value: RegionValue; onChange
           <select
             id="region-kumpulan"
             className={selectCls}
-            disabled={!value.regionDistrict}
+            disabled={!value.regionDistrict || districts.length === 0}
             value={value.regionKumpulan ?? ""}
             onChange={(e) => onChange({ ...value, regionKumpulan: (e.target.value || undefined) as Kumpulan | undefined })}
           >
@@ -66,6 +74,11 @@ export function RegionFields({ value, onChange }: { value: RegionValue; onChange
           </select>
         </div>
       </div>
+      {value.regionState && districts.length === 0 && (
+        <p className="text-xs text-muted-foreground">
+          No JKR kawasan adjustment is available for {value.regionState} — benchmark prices will be used without a regional uplift.
+        </p>
+      )}
       {adj && value.regionKumpulan && (
         <p className="text-xs text-muted-foreground">
           JKR benchmark prices will be adjusted by <span className="font-medium text-foreground">+{adj[value.regionKumpulan]}%</span> for {value.regionDistrict}, {value.regionState}.

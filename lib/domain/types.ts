@@ -50,6 +50,9 @@ export interface ProjectDoc {
   /** Profit markup (%) applied on top of selected cost prices at read time.
    *  Tender price = selectedPrice × (1 + pct/100). Undefined/null = no uplift. */
   profitMarginPct?: number | null;
+  /** Contingency sum (%) applied on top of cost, before the profit margin.
+   *  Tender price = selectedPrice × (1 + contingency/100) × (1 + margin/100). */
+  contingencyPct?: number | null;
   currentStage?: PipelineStage;
   stageUpdatedAt?: Date;
   processingError?: string;
