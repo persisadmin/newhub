@@ -21,6 +21,8 @@ export interface UserDoc {
     state?: string;
     postcode?: string;
   };
+  /** Set when the user dismisses the getting-started checklist (hides it permanently). */
+  onboardingChecklistDismissedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { redirect } from "next/navigation";
 import { getDb, ensureIndexes } from "@/lib/db";
 import { Card, CardContent, CardHeader, CardTitle, StatusBadge, Button, EmptyState } from "@/components/ui";
+import { OnboardingChecklist } from "@/components/onboarding-checklist";
 
 export const dynamic = "force-dynamic";
 
@@ -59,6 +60,8 @@ export default async function DashboardPage() {
         </div>
         <div className="flex gap-2"><Link href="/projects/new"><Button>New Project <ArrowRight size={14} /></Button></Link></div>
       </div>
+
+      <OnboardingChecklist />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {kpis.map(({ label, value, icon: Icon }) => (
