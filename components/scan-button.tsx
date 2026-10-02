@@ -1,23 +1,31 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, Trash2, ArrowUp, ArrowDown, Loader2, X, CheckCircle2 } from "lucide-react";
-import { Button, Modal } from "@/components/ui";
+import { Camera, Trash2, RotateCcw, Loader2, X, CheckCircle2, Plus, ImagePlus } from "lucide-react";
+import { Button } from "@/components/ui";
 
 /**
- * Built-in document scanner: uses the device camera to photograph hard-copy
- * tender pages, assembles them into a PDF in the browser (jsPDF), uploads it
- * to the project, and starts processing. Works on phones, tablets and laptops.
+ * Fullscreen document scanner: photograph hard-copy tender pages with the
+ * device camera, review the captures, then assemble them into a PDF in the
+ * browser (jsPDF), upload to the project, and start processing.
+ *
+ * Flow: capture (fullscreen, one shutter, numbered filmstrip) → review hub
+ * (see all pages, retake/delete, add more) → process. Captured pages persist
+ * to IndexedDB between states so an interrupted scan (phone call, tab killed)
+ * can be resumed. Capped at MAX_PAGES; longer documents should go through the
+ * normal file-upload path.
  */
 
-interface ScannedPage { dataUrl: string; width: number; height: number }
-interface ProjectOption { _id: string; name: string }
+interface ScannedPage { key: string; blob: Blob; width: number; height: number; url: string }
 
-/**
- * Soft cap on pages per scan. Each captured page is a ~0.4–0.6 MB JPEG, so
- * ~30 pages stays comfortably under the server's 20 MB upload limit and keeps
- * the browser-side PDF build from straining a phone's memory.
- */
-const MAX_PAGES = 30;
+/** Hard cap on pages per scan. Beyond this, a physical/office scanner to PDF is the right tool. */
+const MAX_PAGES = 50;
+/** Abandoned scan sessions are cleared after this long (tender docs shouldn't linger on-device). */
+const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const IDB_DB = "persis-scan";
+const IDB_STORE = "sessions";
+const SESSION_PREFIX = "scan:";
+
+/* ---------------- device detection ---------------- */
 
 /** Scanning is a mobile-only feature (hard copies are photographed on-site). */
 export function isMobileDevice(): boolean {
@@ -27,11 +35,13 @@ export function isMobileDevice(): boolean {
   return uaMobile || Boolean(coarsePointer);
 }
 
+/* ---------------- camera helpers ---------------- */
+
 /**
  * Open the camera with a graceful constraint ladder: try the rear camera first,
  * then fall back to any available camera. A hard `facingMode: "environment"`
- * throws OverconstrainedError on devices with no rear camera (some tablets and
- * laptops), so we retry with it only as an "ideal" before dropping it entirely.
+ * throws OverconstrainedError on devices with no rear camera, so we retry with
+ * it as an "ideal" before dropping it entirely.
  */
 async function openCameraStream(): Promise<MediaStream> {
   const md = navigator.mediaDevices;
@@ -47,9 +57,8 @@ async function openCameraStream(): Promise<MediaStream> {
       return await md.getUserMedia(constraints);
     } catch (err) {
       lastErr = err;
-      // Only keep retrying on constraint/device problems — a permission denial
-      // or "in use elsewhere" won't be fixed by relaxing the constraints.
       const name = (err as DOMException)?.name;
+      // Permission denial / device busy / no device won't be fixed by relaxing constraints.
       if (name === "NotAllowedError" || name === "NotFoundError" || name === "NotReadableError" || name === "AbortError") break;
     }
   }
@@ -62,24 +71,92 @@ function describeCameraError(err: unknown): string {
   switch (name) {
     case "NotAllowedError":
     case "SecurityError":
-      return "Camera permission was blocked. Tap the lock icon in your browser's address bar and allow the camera, then reopen the scanner — or add photos from your gallery below.";
+      return "Camera permission was blocked. Tap the lock icon in your browser's address bar and allow the camera, then retry — or add photos from your gallery instead.";
     case "NotFoundError":
     case "DevicesNotFoundError":
-      return "No camera was found on this device. You can add photos from your gallery below instead.";
+      return "No camera was found on this device. You can add photos from your gallery instead.";
     case "NotReadableError":
     case "TrackStartError":
-      return "The camera is busy in another app. Close the other app and reopen the scanner — or add photos from your gallery below.";
+      return "The camera is busy in another app. Close the other app and retry — or add photos from your gallery instead.";
     case "OverconstrainedError":
-      return "This device's camera doesn't meet the scanner's requirements. You can add photos from your gallery below instead.";
+      return "This device's camera doesn't meet the scanner's requirements. You can add photos from your gallery instead.";
     default:
-      return "The camera couldn't be opened (a secure HTTPS connection is required). You can add photos from your gallery below instead.";
+      return "The camera couldn't be opened (a secure HTTPS connection is required). You can add photos from your gallery instead.";
   }
 }
+
+/* ---------------- IndexedDB persistence ---------------- */
+
+interface StoredPage { key: string; width: number; height: number; blob: Blob }
+interface ScanSession { savedAt: number; pages: StoredPage[] }
+
+function idbOpen(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_DB, 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore(IDB_STORE); };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+function idbReq<T>(req: IDBRequest<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+/** Persist the current pages for a session key (write-through on every change). */
+async function saveScanSession(key: string, pages: ScannedPage[]): Promise<void> {
+  const db = await idbOpen();
+  try {
+    const stored: StoredPage[] = pages.map((p) => ({ key: p.key, width: p.width, height: p.height, blob: p.blob }));
+    const session: ScanSession = { savedAt: Date.now(), pages: stored };
+    await idbReq(db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).put(session, SESSION_PREFIX + key));
+  } finally {
+    db.close();
+  }
+}
+
+/** Load a stored session, or null if none / expired. Expired sessions are cleaned up. */
+async function loadScanSession(key: string): Promise<ScanSession | null> {
+  try {
+    const db = await idbOpen();
+    try {
+      const store = db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE);
+      const session = (await idbReq(store.get(SESSION_PREFIX + key))) as ScanSession | undefined;
+      if (!session) return null;
+      if (Date.now() - session.savedAt > SESSION_TTL_MS) {
+        await idbReq(store.delete(SESSION_PREFIX + key));
+        return null;
+      }
+      return session;
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+async function clearScanSession(key: string): Promise<void> {
+  try {
+    const db = await idbOpen();
+    try {
+      await idbReq(db.transaction(IDB_STORE, "readwrite").objectStore(IDB_STORE).delete(SESSION_PREFIX + key));
+    } finally {
+      db.close();
+    }
+  } catch {
+    /* non-fatal */
+  }
+}
+
+/* ---------------- public button ---------------- */
 
 export function ScanButton({ projectId, label = "Scan Tender" }: { projectId?: string; label?: string }) {
   const [open, setOpen] = useState(false);
   const [mobile, setMobile] = useState(false);
-  // Detect device on mount (client-only) — button is hidden on desktop.
   useEffect(() => { setMobile(isMobileDevice()); }, []);
   if (!mobile) return null;
   return (
@@ -92,20 +169,35 @@ export function ScanButton({ projectId, label = "Scan Tender" }: { projectId?: s
   );
 }
 
+/* ---------------- the scanner modal ---------------- */
+
+type Mode = "capture" | "review" | "confirmExit";
+
 export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose: () => void; projectId?: string }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+  const filmstripRef = useRef<HTMLDivElement>(null);
+  const counterRef = useRef(0);
+
+  const [mode, setMode] = useState<Mode>("capture");
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [cameraReady, setCameraReady] = useState(false);
-  const [projects, setProjects] = useState<ProjectOption[]>([]);
-  const [targetProject, setTargetProject] = useState(projectId ?? "");
+  const [flash, setFlash] = useState(false);
+  const [resumeCandidate, setResumeCandidate] = useState<ScanSession | null>(null);
   const [busy, setBusy] = useState<"idle" | "building" | "uploading">("idle");
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   /** Bumped to force the camera to (re)start, e.g. after a permission retry. */
   const [retryNonce, setRetryNonce] = useState(0);
+
+  const sessionKey = projectId ?? "pending";
+
+  /* ----- helpers ----- */
+  const releasePages = useCallback((list: ScannedPage[]) => {
+    list.forEach((p) => URL.revokeObjectURL(p.url));
+  }, []);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -113,16 +205,89 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
     setCameraReady(false);
   }, []);
 
-  /**
-   * Open the camera and attach it to the <video> in ONE effect. The <video> is
-   * always mounted before effects run (refs are set first), so attaching after
-   * the async getUserMedia resolves is safe. Splitting open and attach across
-   * two effects caused a race: the attach effect ran before the stream existed
-   * and never re-ran when the ref was later filled, leaving the preview black
-   * and the Capture button disabled.
-   */
+  const persist = useCallback(
+    (list: ScannedPage[]) => {
+      saveScanSession(sessionKey, list).catch(() => {});
+    },
+    [sessionKey]
+  );
+
+  function addPage(blob: Blob, width: number, height: number) {
+    setPages((prev) => {
+      if (prev.length >= MAX_PAGES) return prev;
+      const page: ScannedPage = {
+        key: `${Date.now()}_${counterRef.current++}`,
+        blob,
+        width,
+        height,
+        url: URL.createObjectURL(blob),
+      };
+      const next = [...prev, page];
+      persist(next);
+      return next;
+    });
+    // Scroll the filmstrip to the newest page.
+    requestAnimationFrame(() => {
+      const el = filmstripRef.current;
+      if (el) el.scrollLeft = el.scrollWidth;
+    });
+  }
+
+  function removePage(key: string) {
+    setPages((prev) => {
+      const target = prev.find((p) => p.key === key);
+      if (target) URL.revokeObjectURL(target.url);
+      const next = prev.filter((p) => p.key !== key);
+      persist(next);
+      return next;
+    });
+  }
+
+  function discardAll() {
+    releasePages(pages);
+    setPages([]);
+    clearScanSession(sessionKey);
+  }
+
+  /* ----- load any saved session when the modal opens ----- */
   useEffect(() => {
-    if (!open) { stopCamera(); return; }
+    if (!open) return;
+    setError(null);
+    setDone(null);
+    (async () => {
+      const saved = await loadScanSession(sessionKey);
+      if (saved && saved.pages.length > 0) {
+        setResumeCandidate(saved);
+        setMode("review"); // land on review so they can decide to resume or start fresh
+      }
+    })();
+  }, [open, sessionKey]);
+
+  function resumeSaved() {
+    if (!resumeCandidate) return;
+    const restored: ScannedPage[] = resumeCandidate.pages.map((p) => ({
+      key: p.key,
+      blob: p.blob,
+      width: p.width,
+      height: p.height,
+      url: URL.createObjectURL(p.blob),
+    }));
+    setPages(restored);
+    setResumeCandidate(null);
+    setMode("review");
+  }
+
+  function startFresh() {
+    releasePages(pages);
+    setPages([]);
+    clearScanSession(sessionKey);
+    setResumeCandidate(null);
+    setMode("capture");
+  }
+
+  /* ----- camera lifecycle (capture mode only) ----- */
+  useEffect(() => {
+    if (!open || mode !== "capture") { stopCamera(); return; }
     if (!isMobileDevice()) {
       setCameraError("Scanning is only available on mobile devices. On desktop, please use file upload.");
       return;
@@ -131,12 +296,10 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
     let localStream: MediaStream | null = null;
 
     const video = videoRef.current;
-    // Ready when frames are actually flowing. Listen to several events AND poll
+    // Ready when frames are actually flowing: listen to several events AND poll
     // dimensions, because not every browser fires "playing" reliably.
     const markReady = () => { if (!cancelled) setCameraReady(true); };
-    const checkDimensions = () => {
-      if (!cancelled && videoRef.current && videoRef.current.videoWidth > 0) markReady();
-    };
+    const checkDimensions = () => { if (!cancelled && videoRef.current && videoRef.current.videoWidth > 0) markReady(); };
     video?.addEventListener("playing", markReady);
     video?.addEventListener("loadeddata", markReady);
     video?.addEventListener("canplay", markReady);
@@ -153,21 +316,13 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
         const v = videoRef.current;
         if (v) {
           v.srcObject = stream;
-          v.play().catch(() => {
-            // Some browsers reject play() when the tab is hidden; events/poll still catch it.
-          });
+          v.play().catch(() => { /* events/poll still catch readiness */ });
         }
       } catch (err) {
         if (!cancelled) setCameraError(describeCameraError(err));
       }
     })();
 
-    if (!projectId) {
-      fetch("/api/projects")
-        .then((r) => r.json())
-        .then((j) => { if (j.ok) setProjects(j.data as ProjectOption[]); })
-        .catch(() => {});
-    }
     return () => {
       cancelled = true;
       window.clearInterval(poll);
@@ -178,114 +333,105 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
       localStream?.getTracks().forEach((t) => t.stop());
       stopCamera();
     };
-  }, [open, projectId, stopCamera, retryNonce]);
+  }, [open, mode, stopCamera, retryNonce]);
 
+  /* ----- capture ----- */
   function capture() {
     setError(null);
     const video = videoRef.current;
     if (!video || !video.videoWidth || !video.videoHeight) {
-      setError("The camera isn't ready yet — wait a moment for the preview to appear, then capture.");
+      setError("The camera isn't ready yet — wait for the preview, then capture.");
       return;
     }
-    if (pages.length >= MAX_PAGES) {
-      setError(`Page limit reached (${MAX_PAGES}). Create the PDF now, then scan the rest as a second document.`);
-      return;
-    }
+    if (pages.length >= MAX_PAGES) return; // shutter is disabled at the cap
     try {
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
       const ctx = canvas.getContext("2d");
-      if (!ctx) { setError("Couldn't prepare the image on this device. Try the gallery upload below."); return; }
+      if (!ctx) { setError("Couldn't prepare the image on this device. Try adding from your gallery."); return; }
       ctx.drawImage(video, 0, 0);
-      const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
-      if (!dataUrl || dataUrl.length < 1024) { setError("The capture came out empty — try again in better light."); return; }
-      setPages((p) => [...p, { dataUrl, width: canvas.width, height: canvas.height }]);
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            addPage(blob, canvas.width, canvas.height);
+            // Shutter feedback.
+            setFlash(true);
+            setTimeout(() => setFlash(false), 180);
+            navigator.vibrate?.(15);
+          } else {
+            setError("The capture came out empty — try again in better light.");
+          }
+        },
+        "image/jpeg",
+        0.85
+      );
     } catch {
-      setError("Capture failed on this device. Try the gallery upload below.");
+      setError("Capture failed on this device. Try adding from your gallery.");
     }
   }
 
-  /** Fallback when the camera can't be used: pick photos from the gallery. */
+  /* ----- gallery fallback ----- */
   function onGalleryPicked(e: React.ChangeEvent<HTMLInputElement>) {
     setError(null);
     const files = Array.from(e.target.files ?? []);
-    e.target.value = ""; // allow picking the same file again
+    e.target.value = "";
     if (files.length === 0) return;
     const room = MAX_PAGES - pages.length;
     if (files.length > room) setError(`Only ${room} more page${room === 1 ? "" : "s"} fit in this scan — extra photos were ignored.`);
     files.slice(0, room).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        const img = new Image();
-        img.onload = () => {
-          // Re-encode to JPEG so every page matches the PDF pipeline.
-          const canvas = document.createElement("canvas");
-          canvas.width = img.naturalWidth;
-          canvas.height = img.naturalHeight;
-          const ctx = canvas.getContext("2d");
-          if (!ctx) return;
-          ctx.drawImage(img, 0, 0);
-          setPages((p) => (p.length >= MAX_PAGES ? p : [...p, { dataUrl: canvas.toDataURL("image/jpeg", 0.85), width: canvas.width, height: canvas.height }]));
-        };
-        img.src = String(reader.result);
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        URL.revokeObjectURL(objectUrl);
+        if (!ctx) return;
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => { if (blob) addPage(blob, canvas.width, canvas.height); }, "image/jpeg", 0.85);
       };
-      reader.readAsDataURL(file);
+      img.src = objectUrl;
     });
   }
 
-  function removePage(i: number) { setPages((p) => p.filter((_, idx) => idx !== i)); }
-  function movePage(i: number, dir: -1 | 1) {
-    setPages((p) => {
-      const to = i + dir;
-      if (to < 0 || to >= p.length) return p;
-      const next = [...p];
-      [next[i], next[to]] = [next[to], next[i]];
-      return next;
-    });
-  }
-
-  async function buildPdfAndUpload() {
+  /* ----- build PDF + upload ----- */
+  async function processScan() {
     if (pages.length === 0) { setError("Capture at least one page."); return; }
-    if (pages.length > MAX_PAGES) { setError(`Too many pages — split this into two scans of up to ${MAX_PAGES} pages each.`); return; }
-    const pid = projectId ?? targetProject;
-    if (!pid) { setError("Choose a project for this scan."); return; }
+    const pid = projectId;
+    if (!pid) { setError("Open a project first — scanning is tied to a specific tender."); return; }
     setError(null);
 
     setBusy("building");
     let blob: Blob;
     try {
       const { jsPDF } = await import("jspdf");
-      // Fixed A4 page in inches, orientation chosen per page so landscape photos
-      // stay landscape. Passing camera PIXELS as the page size (in pt) previously
-      // made jsPDF build a ~27"x15" page that pdftoppm rendered at ~9MP/page —
-      // far too large for the vision OCR endpoint. A4 keeps OCR renders sane and
-      // the aspect correct; the photo is letterboxed inside, never distorted.
-      const A4: [number, number] = [8.27, 11.69]; // inches
+      // Fixed A4 in inches, orientation per page; the photo is letterboxed inside.
+      const A4: [number, number] = [8.27, 11.69];
       const firstLandscape = pages[0].width > pages[0].height;
       const pdf = new jsPDF({ unit: "in", format: "a4", orientation: firstLandscape ? "landscape" : "portrait", compress: true });
       let added = 0;
-      pages.forEach((page, i) => {
+      for (const page of pages) {
         const landscape = page.width > page.height;
         const [pw, ph] = landscape ? [A4[1], A4[0]] : A4;
         if (added > 0) pdf.addPage("a4", landscape ? "landscape" : "portrait");
-        // Letterbox: scale the photo to fit the page, preserving aspect ratio.
         const scale = Math.min(pw / page.width, ph / page.height);
         const w = page.width * scale;
         const h = page.height * scale;
         try {
-          pdf.addImage(page.dataUrl, "JPEG", (pw - w) / 2, (ph - h) / 2, w, h);
+          const dataUrl = await blobToDataUrl(page.blob);
+          pdf.addImage(dataUrl, "JPEG", (pw - w) / 2, (ph - h) / 2, w, h);
           added++;
         } catch {
-          // A single corrupt/oversized frame shouldn't sink the whole scan.
-          console.warn(`scan: skipped page ${i + 1} (addImage failed)`);
+          // A single corrupt frame shouldn't sink the whole scan.
         }
-      });
+      }
       if (added === 0) { setError("None of the captured images could be added to the PDF. Please re-capture them."); setBusy("idle"); return; }
       blob = pdf.output("blob");
     } catch (err) {
       console.error("scan: PDF build failed", err);
-      setError("Couldn't build the PDF on this device — the images may be too large. Try fewer pages per scan.");
+      setError("Couldn't build the PDF on this device — the images may be too large. Try fewer pages.");
       setBusy("idle");
       return;
     }
@@ -305,102 +451,131 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
     }
     if (!upJson.ok) { setError(upJson.error?.message ?? "Upload failed."); setBusy("idle"); return; }
 
-    let procJson: { ok: boolean } = { ok: false };
+    let procOk = false;
     try {
       const proc = await fetch(`/api/projects/${pid}/process`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ documentId: upJson.data!.document._id }),
       });
-      procJson = await proc.json();
+      procOk = (await proc.json()).ok;
     } catch {
-      procJson = { ok: false };
+      procOk = false;
     }
     setBusy("idle");
-    if (!procJson.ok) {
-      // Upload succeeded; processing didn't auto-start — not fatal
-      setDone("Scanned document uploaded. Open the project to start processing.");
-    } else {
-      setDone(`Scan uploaded (${pages.length} page${pages.length === 1 ? "" : "s"}) — processing started.`);
-    }
+    clearScanSession(sessionKey);
+    const count = pages.length;
+    releasePages(pages);
     setPages([]);
+    setDone(
+      procOk
+        ? `Scan uploaded (${count} page${count === 1 ? "" : "s"}) — processing started.`
+        : "Scanned document uploaded. Open the project to start processing."
+    );
   }
 
-  function close() {
+  /* ----- close / exit ----- */
+  function requestExit() {
     stopCamera();
-    setPages([]);
+    if (pages.length > 0) setMode("confirmExit");
+    else closeAll();
+  }
+
+  /** Exit the camera into the review hub (pages kept). */
+  function exitToReview() {
+    stopCamera();
+    setMode("review");
+  }
+
+  /** Fully close the scanner. Pages persist (IndexedDB) unless explicitly discarded. */
+  function closeAll() {
+    stopCamera();
+    onClose();
+    // Reset transient UI but keep pages persisted for resume.
+    setMode("capture");
     setDone(null);
     setError(null);
-    onClose();
+  }
+
+  const atCap = pages.length >= MAX_PAGES;
+
+  /* ================= render ================= */
+  if (!open) return null;
+
+  // Success screen
+  if (done) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-background p-6">
+        <div className="flex max-w-sm flex-col items-center gap-4 text-center">
+          <CheckCircle2 size={40} className="text-green-600" />
+          <p className="text-sm">{done}</p>
+          <Button onClick={closeAll}>Done</Button>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <Modal open={open} onClose={close} title="Scan tender document">
-      {done ? (
-        <div className="flex flex-col items-center gap-3 py-6 text-center">
-          <CheckCircle2 size={32} className="text-green-600" />
-          <p className="text-sm">{done}</p>
-          <Button onClick={close}>Done</Button>
-        </div>
-      ) : (
-        <div className="flex max-h-[85dvh] flex-col">
-        <div className="flex-1 space-y-4 overflow-y-auto pr-1">
-          {cameraError ? (
-            <div className="space-y-3">
-              <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{cameraError}</p>
-              <Button variant="outline" size="sm" onClick={() => setRetryNonce((n) => n + 1)}>
-                <Camera size={14} /> Retry camera
-              </Button>
-            </div>
-          ) : (
-            <div className="relative overflow-hidden rounded-lg bg-black">
-              <video ref={videoRef} playsInline muted autoPlay className="max-h-[50vh] w-full object-contain" />
-              <div className="pointer-events-none absolute inset-4 rounded border-2 border-dashed border-white/40" />
-              {!cameraReady && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 text-white">
-                  <Loader2 size={22} className="animate-spin" />
-                  <p className="text-xs">Starting camera…</p>
+    <div className="fixed inset-0 z-50 flex flex-col bg-black">
+      {/* hidden gallery picker */}
+      <input ref={galleryRef} type="file" accept="image/*" multiple className="hidden" onChange={onGalleryPicked} />
+
+      {/* ---- CAPTURE MODE ---- */}
+      {mode === "capture" && (
+        <>
+          {/* top bar */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex items-center justify-between p-4">
+            <span className="rounded-full bg-black/50 px-3 py-1 text-xs font-medium text-white">
+              {pages.length} / {MAX_PAGES}
+            </span>
+            <button
+              onClick={requestExit}
+              aria-label="Close camera"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white"
+            >
+              <X size={20} />
+            </button>
+          </div>
+
+          {/* live preview */}
+          <div className="relative flex-1 overflow-hidden">
+            {cameraError ? (
+              <div className="flex h-full flex-col items-center justify-center gap-4 p-6 text-center">
+                <p role="alert" className="max-w-sm rounded-md bg-destructive/20 px-4 py-3 text-sm text-white">{cameraError}</p>
+                <div className="flex gap-3">
+                  <Button variant="outline" size="sm" onClick={() => setRetryNonce((n) => n + 1)}>
+                    <Camera size={14} /> Retry camera
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => galleryRef.current?.click()}>
+                    <ImagePlus size={14} /> Add from gallery
+                  </Button>
                 </div>
-              )}
-            </div>
-          )}
+              </div>
+            ) : (
+              <>
+                <video ref={videoRef} playsInline muted autoPlay className="h-full w-full object-cover" />
+                <div className="pointer-events-none absolute inset-6 rounded-lg border-2 border-dashed border-white/40" />
+                {!cameraReady && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-black/70 text-white">
+                    <Loader2 size={24} className="animate-spin" />
+                    <p className="text-xs">Starting camera…</p>
+                  </div>
+                )}
+                {flash && <div className="pointer-events-none absolute inset-0 bg-white" />}
+              </>
+            )}
+          </div>
 
-          {/* Hidden gallery picker — the fallback when the camera can't be used. */}
-          <input
-            ref={galleryRef}
-            type="file"
-            accept="image/*"
-            multiple
-            className="hidden"
-            onChange={onGalleryPicked}
-          />
-
-          {!projectId && (
-            <div className="space-y-1">
-              <label className="text-xs font-medium">Save into project</label>
-              <select
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
-                value={targetProject}
-                onChange={(e) => setTargetProject(e.target.value)}
-              >
-                <option value="">— select a project —</option>
-                {projects.map((p) => <option key={p._id} value={p._id}>{p.name}</option>)}
-              </select>
-            </div>
-          )}
-
+          {/* filmstrip of captured pages */}
           {pages.length > 0 && (
-            <div>
-              <p className="mb-2 text-xs font-medium text-muted-foreground">Captured pages ({pages.length}/{MAX_PAGES})</p>
-              <div className="flex flex-nowrap gap-2 overflow-x-auto pb-1">
+            <div className="absolute inset-x-0 bottom-28 z-20">
+              <div ref={filmstripRef} className="flex gap-2 overflow-x-auto px-4 pb-1">
                 {pages.map((p, i) => (
-                  <div key={i} className="group relative shrink-0">
-                    <img src={p.dataUrl} alt={`Page ${i + 1}`} className="h-20 rounded border border-border object-cover" />
-                    <span className="absolute left-1 top-1 rounded bg-black/60 px-1 text-[10px] text-white">{i + 1}</span>
-                    <span className="absolute right-1 top-1 flex gap-0.5">
-                      <button onClick={() => movePage(i, -1)} className="rounded bg-black/60 p-0.5 text-white" aria-label="Move earlier"><ArrowUp size={10} /></button>
-                      <button onClick={() => movePage(i, 1)} className="rounded bg-black/60 p-0.5 text-white" aria-label="Move later"><ArrowDown size={10} /></button>
-                      <button onClick={() => removePage(i)} className="rounded bg-destructive/80 p-0.5 text-white" aria-label="Remove page"><Trash2 size={10} /></button>
+                  <div key={p.key} className="relative h-16 w-12 shrink-0 overflow-hidden rounded border border-white/50">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={p.url} alt={`Page ${i + 1}`} className="h-full w-full object-cover" />
+                    <span className="absolute bottom-0 right-0 rounded-tl bg-black/70 px-1 text-[10px] font-semibold text-white">
+                      {i + 1}
                     </span>
                   </div>
                 ))}
@@ -408,34 +583,142 @@ export function ScanModal({ open, onClose, projectId }: { open: boolean; onClose
             </div>
           )}
 
-          {error && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-        </div>
-
-          {/* Pinned action bar — stays visible no matter how many pages are captured */}
-          <div className="sticky bottom-0 mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border bg-card pt-4">
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={capture} disabled={!cameraReady || busy !== "idle" || pages.length >= MAX_PAGES}>
-                <Camera size={14} /> Capture page
-              </Button>
-              <Button variant="outline" onClick={() => galleryRef.current?.click()} disabled={busy !== "idle" || pages.length >= MAX_PAGES}>
-                Add from gallery
-              </Button>
-            </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={close} disabled={busy !== "idle"}><X size={14} /> Cancel</Button>
-              <Button onClick={buildPdfAndUpload} disabled={pages.length === 0 || busy !== "idle"}>
-                {busy !== "idle" ? <Loader2 size={14} className="animate-spin" /> : null}
-                {busy === "building" ? "Building PDF…" : busy === "uploading" ? "Uploading…" : `Create PDF & process (${pages.length})`}
-              </Button>
-            </div>
+          {/* bottom bar: shutter */}
+          <div className="relative z-20 flex items-center justify-center gap-6 pb-8 pt-4">
+            <button
+              onClick={() => galleryRef.current?.click()}
+              aria-label="Add from gallery"
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white"
+            >
+              <ImagePlus size={18} />
+            </button>
+            <button
+              onClick={capture}
+              disabled={!cameraReady || atCap}
+              aria-label="Capture page"
+              className="flex h-16 w-16 items-center justify-center rounded-full border-4 border-white bg-white/20 disabled:opacity-40"
+            >
+              <span className="h-12 w-12 rounded-full bg-white" />
+            </button>
+            <button
+              onClick={exitToReview}
+              aria-label="Review pages"
+              className="relative flex h-11 w-11 items-center justify-center rounded-full bg-white/10 text-white"
+            >
+              <CheckCircle2 size={18} />
+              {pages.length > 0 && (
+                <span className="absolute -top-1 -right-1 flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  {pages.length}
+                </span>
+              )}
+            </button>
           </div>
 
-          <p className="text-xs text-muted-foreground">
-            Photograph pages in order, one at a time — the pages become one PDF and go straight into
-            the extraction pipeline (OCR included). Good light and a flat page give the best OCR results.
-          </p>
+          {error && <p role="alert" className="absolute inset-x-4 bottom-24 z-30 rounded-md bg-destructive/80 px-3 py-2 text-center text-xs text-white">{error}</p>}
+        </>
+      )}
+
+      {/* ---- REVIEW MODE (hub) ---- */}
+      {mode === "review" && (
+        <div className="flex h-full flex-col bg-background">
+          <div className="flex items-center justify-between border-b border-border p-4">
+            <div>
+              <h2 className="text-base font-semibold">Review scan</h2>
+              <p className="text-xs text-muted-foreground">{pages.length} page{pages.length === 1 ? "" : "s"} captured</p>
+            </div>
+            <button onClick={closeAll} aria-label="Close" className="flex h-9 w-9 items-center justify-center rounded-full hover:bg-muted">
+              <X size={18} />
+            </button>
+          </div>
+
+          {/* resume prompt */}
+          {resumeCandidate && pages.length === 0 && (
+            <div className="m-4 flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/5 p-4">
+              <p className="text-sm">You have an unfinished scan with <strong>{resumeCandidate.pages.length}</strong> page{resumeCandidate.pages.length === 1 ? "" : "s"} from earlier.</p>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={resumeSaved}><RotateCcw size={14} /> Resume scan</Button>
+                <Button size="sm" variant="outline" onClick={startFresh}><Trash2 size={14} /> Start fresh</Button>
+              </div>
+            </div>
+          )}
+
+          {atCap && (
+            <div className="mx-4 mt-4 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+              That&apos;s {MAX_PAGES} pages — the camera limit. For longer documents, scan to a PDF with a physical or office scanner and upload it here instead; it&apos;ll be faster and sharper.
+            </div>
+          )}
+
+          {pages.length === 0 && !resumeCandidate ? (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center">
+              <Camera size={36} className="text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">No pages captured yet.</p>
+              <Button onClick={() => setMode("capture")}><Camera size={14} /> Open camera</Button>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-y-auto p-4">
+              <div className="grid grid-cols-3 gap-3 sm:grid-cols-4">
+                {pages.map((p, i) => (
+                  <div key={p.key} className="group relative overflow-hidden rounded-lg border border-border">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={p.url} alt={`Page ${i + 1}`} className="aspect-[3/4] w-full object-cover" />
+                    <span className="absolute left-1 top-1 rounded bg-black/70 px-1.5 py-0.5 text-[11px] font-bold text-white">{i + 1}</span>
+                    <button
+                      onClick={() => removePage(p.key)}
+                      aria-label={`Delete page ${i + 1}`}
+                      className="absolute right-1 top-1 flex h-7 w-7 items-center justify-center rounded-full bg-destructive/90 text-white"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {error && <p role="alert" className="mx-4 mb-2 rounded-md bg-destructive/10 px-3 py-2 text-center text-xs text-destructive">{error}</p>}
+
+          {/* review action bar */}
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border p-4">
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setMode("capture")} disabled={busy !== "idle" || atCap}>
+                <Plus size={14} /> Add more
+              </Button>
+              <Button variant="outline" onClick={() => galleryRef.current?.click()} disabled={busy !== "idle" || atCap}>
+                <ImagePlus size={14} /> From gallery
+              </Button>
+            </div>
+            <Button onClick={processScan} disabled={pages.length === 0 || busy !== "idle"}>
+              {busy !== "idle" ? <Loader2 size={14} className="animate-spin" /> : null}
+              {busy === "building" ? "Building PDF…" : busy === "uploading" ? "Uploading…" : `Process ${pages.length} page${pages.length === 1 ? "" : "s"}`}
+            </Button>
+          </div>
         </div>
       )}
-    </Modal>
+
+      {/* ---- CONFIRM EXIT ---- */}
+      {mode === "confirmExit" && (
+        <div className="flex h-full flex-col items-center justify-center gap-4 bg-black/80 p-6 text-center text-white">
+          <p className="max-w-sm text-sm">
+            You&apos;ve captured <strong>{pages.length}</strong> page{pages.length === 1 ? "" : "s"}. They&apos;re saved on this device — close to review them, or keep capturing.
+          </p>
+          <div className="flex flex-col gap-2">
+            <Button onClick={exitToReview}><CheckCircle2 size={14} /> Review {pages.length} page{pages.length === 1 ? "" : "s"}</Button>
+            <Button variant="outline" onClick={() => setMode("capture")}><Camera size={14} /> Keep capturing</Button>
+            <Button variant="outline" onClick={() => { discardAll(); closeAll(); }}><Trash2 size={14} /> Discard &amp; close</Button>
+          </div>
+        </div>
+      )}
+    </div>
   );
+}
+
+/* ---------------- small utils ---------------- */
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
