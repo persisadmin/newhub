@@ -4,6 +4,7 @@ import { getDb, ensureIndexes } from "@/lib/db";
 import { ok, fail, handleError } from "@/lib/api";
 import { requireUser, requireOwnedProject } from "@/lib/auth-helpers";
 import { audit } from "@/lib/audit";
+import { deleteFile } from "@/lib/storage";
 import { isRunning } from "@/lib/services/processing/runner";
 
 export const dynamic = "force-dynamic";
@@ -88,6 +89,9 @@ export async function DELETE(_req: Request, ctx: Ctx) {
     if (isRunning(id)) return fail("Cannot delete a project while it is processing.", 409, "BUSY");
     const db = await getDb();
     const pid = new ObjectId(id);
+    // Remove stored files (uploads, deliverables, TTS audio) so nothing orphans in the bucket.
+    const fileDocs = await db.collection<{ storagePath?: string }>("tender_documents").find({ projectId: pid }).toArray();
+    const genDocs = await db.collection<{ storagePath?: string }>("project_documents").find({ projectId: pid }).toArray();
     await Promise.all([
       db.collection("projects").deleteOne({ _id: pid }),
       db.collection("tender_documents").deleteMany({ projectId: pid }),
@@ -95,7 +99,9 @@ export async function DELETE(_req: Request, ctx: Ctx) {
       db.collection("boq_items").deleteMany({ projectId: pid }),
       db.collection("pricing_records").deleteMany({ projectId: pid }),
       db.collection("processing_jobs").deleteMany({ projectId: pid }),
+      db.collection("project_documents").deleteMany({ projectId: pid }),
     ]);
+    await Promise.all([...fileDocs, ...genDocs].map((d) => (d.storagePath ? deleteFile(d.storagePath) : Promise.resolve())));
     await audit({ userId: user.id, action: "project.deleted", entityType: "project", entityId: id, previousValue: { name: project.name }, source: "api" });
     return ok({});
   } catch (err) {

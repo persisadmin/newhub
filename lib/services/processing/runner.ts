@@ -1,8 +1,8 @@
-import fs from "node:fs/promises";
 import { ObjectId } from "mongodb";
 import { getDb, ensureIndexes } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { audit } from "@/lib/audit";
+import { getFile } from "@/lib/storage";
 import type { PipelineStage, ProjectDoc, ProcessingJobDoc } from "@/lib/domain/types";
 import { extractText, extractTenderInfo, parseBoqLinesWithStats, normaliseItem } from "@/lib/services/extraction";
 import type { ParsedBoqLine } from "@/lib/services/extraction";
@@ -101,7 +101,7 @@ async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt:
     await checkCancelled(key);
     const doc = await db.collection("tender_documents").findOne({ _id: did, projectId: pid });
     if (!doc) throw new Error("document not found");
-    const buf = await fs.readFile(doc.storagePath);
+    const buf = await getFile(doc.storagePath);
 
     // Stage 2: text extraction (+ OCR for scanned PDFs when Kimi is configured)
     await setStage(pid, "text_extraction");

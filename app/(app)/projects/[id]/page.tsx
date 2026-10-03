@@ -1026,16 +1026,23 @@ function GeneratedDocs({ projectId, refreshKey, running }: { projectId: string; 
         ) : (
           <ul className="divide-y divide-border rounded-lg border border-border">
             {docs.map((d) => (
-              <li key={d._id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                <span className="flex min-w-0 items-center gap-2">
-                  <FileText size={14} className="shrink-0 text-muted-foreground" />
-                  <span className="truncate">{d.title}</span>
-                  <span className="text-xs text-muted-foreground">({(d.size / 1024).toFixed(0)} KB)</span>
+              <li key={d._id} className="flex flex-col gap-2 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                {/* filename gets its own full-width line on mobile so it never truncates away */}
+                <span className="flex min-w-0 items-start gap-2">
+                  <FileText size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0">
+                    <span className="block break-words font-medium">{d.title}</span>
+                    <span className="block break-all text-xs text-muted-foreground">{d.filename} · {(d.size / 1024).toFixed(0)} KB</span>
+                  </span>
                 </span>
-                <span className="flex shrink-0 gap-2">
-                  <Button size="sm" variant="outline" onClick={() => setPreviewing(d)}><Eye size={12} /> Preview</Button>
+                <span className="flex shrink-0 gap-2 self-end sm:self-auto">
+                  <Button size="sm" variant="outline" onClick={() => setPreviewing(d)} aria-label={`Preview ${d.title}`}>
+                    <Eye size={12} /> <span className="hidden sm:inline">Preview</span>
+                  </Button>
                   <a href={`/api/projects/${projectId}/documents/${d._id}/download`} download={d.filename}>
-                    <Button size="sm" variant="outline"><Download size={12} /> Download</Button>
+                    <Button size="sm" variant="outline" aria-label={`Download ${d.title}`}>
+                      <Download size={12} /> <span className="hidden sm:inline">Download</span>
+                    </Button>
                   </a>
                 </span>
               </li>

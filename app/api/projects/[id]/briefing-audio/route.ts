@@ -1,7 +1,6 @@
-import fs from "fs/promises";
-import path from "path";
 import { handleError } from "@/lib/api";
 import { requireUser, requireOwnedProject } from "@/lib/auth-helpers";
+import { getFile, storageRefFor } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +17,8 @@ export async function GET(req: Request, ctx: Ctx) {
     if (!Number.isInteger(part) || part < 0 || part > 50) {
       return Response.json({ ok: false, error: { code: "VALIDATION", message: "Invalid part." } }, { status: 400 });
     }
-    const file = path.join("data", "audio", id, `part-${part}.wav`);
-    const buf = await fs.readFile(file);
+    // Audio is stored under the same key the TTS writer used.
+    const buf = await getFile(storageRefFor(`audio/${id}/part-${part}.wav`));
     return new Response(new Uint8Array(buf), {
       headers: {
         "Content-Type": "audio/wav",

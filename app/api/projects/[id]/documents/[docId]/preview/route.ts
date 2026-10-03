@@ -1,8 +1,8 @@
-import fs from "fs/promises";
 import path from "path";
 import { getDb } from "@/lib/db";
 import { ok, fail, handleError } from "@/lib/api";
 import { requireUser, requireOwnedProject } from "@/lib/auth-helpers";
+import { getFile } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -100,7 +100,7 @@ export async function GET(_req: Request, ctx: Ctx) {
     ).findOne({ _id: new (await import("mongodb")).ObjectId(docId), projectId: project._id });
     if (!doc) return fail("Document not found.", 404, "NOT_FOUND");
 
-    const buf = await fs.readFile(doc.storagePath);
+    const buf = await getFile(doc.storagePath);
     const ext = path.extname(doc.filename).toLowerCase();
 
     if (ext === ".xlsx") {

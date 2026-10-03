@@ -1,6 +1,5 @@
-import fs from "fs/promises";
-import path from "path";
 import { logger } from "@/lib/logger";
+import { putFile } from "@/lib/storage";
 
 /**
  * Gemini TTS (Google AI Gemini Interactions API).
@@ -96,8 +95,9 @@ async function synthesizeChunk(text: string, apiKey: string, model: string, voic
 }
 
 /**
- * Synthesize `text` to per-chunk audio files under data/audio/<projectId>/.
- * Returns the number of parts written. Throws on failure (caller catches).
+ * Synthesize `text` to per-chunk audio files under audio/<projectId>/ in the
+ * configured object store (or local disk in dev). Returns the number of parts
+ * written. Throws on failure (caller catches).
  */
 export async function synthesizeToFiles(projectId: string, text: string): Promise<number> {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -105,13 +105,10 @@ export async function synthesizeToFiles(projectId: string, text: string): Promis
   const model = process.env.GEMINI_TTS_MODEL || "gemini-3.8-flash-lite-tts";
   const voice = process.env.GEMINI_TTS_VOICE || "Kore";
   const chunks = splitForTts(text);
-  const dir = path.join("data", "audio", projectId);
-  await fs.rm(dir, { recursive: true, force: true });
-  await fs.mkdir(dir, { recursive: true });
   let written = 0;
   for (let i = 0; i < chunks.length; i++) {
     const buf = await synthesizeChunk(chunks[i], apiKey, model, voice);
-    await fs.writeFile(path.join(dir, `part-${i}.wav`), buf);
+    await putFile(`audio/${projectId}/part-${i}.wav`, buf, "audio/wav");
     written++;
     logger.info("tts.chunk", { projectId, part: i, of: chunks.length, bytes: buf.length });
   }

@@ -1,8 +1,8 @@
 import { ObjectId } from "mongodb";
-import fs from "fs/promises";
 import path from "path";
 import { getDb, ensureIndexes } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { putFile, deleteFile } from "@/lib/storage";
 import { isLlmConfigured, getLlmFeatures } from "@/lib/services/llm/kimi";
 import { generateSow, generateSpecs, generateSummary } from "@/lib/services/llm/boq-extractor";
 import {
@@ -175,9 +175,10 @@ export async function generateProjectDocuments(
   const project = await db.collection<{ name?: string }>("projects").findOne({ _id: projectId });
   const projectTitle = project?.name || manifest?.project_title || "project";
 
-  // Fresh pack per processing run
+  // Fresh pack per processing run — remove the previous files from storage too.
+  const previous = await db.collection<{ storagePath?: string }>("project_documents").find({ projectId }).toArray();
   await db.collection("project_documents").deleteMany({ projectId });
-  await fs.rm(path.join("data", "documents", projectId.toString()), { recursive: true, force: true });
+  await Promise.all(previous.map((d) => (d.storagePath ? deleteFile(d.storagePath) : Promise.resolve())));
 
   // Data-driven deliverables (BOQ + priced schedule) are always generated from
   // database records — no LLM required. LLM-written documents (summary, SOW,
@@ -213,10 +214,11 @@ export async function generateProjectDocuments(
       }
 
       const file = await buildFileFor(type, data, projectTitle);
-      const dir = path.join("data", "documents", projectId.toString());
-      await fs.mkdir(dir, { recursive: true });
-      const storagePath = path.join(dir, `${type}${path.extname(file.filename)}`);
-      await fs.writeFile(storagePath, file.buffer);
+      const { storagePath } = await putFile(
+        `documents/${projectId.toString()}/${type}${path.extname(file.filename)}`,
+        file.buffer,
+        file.contentType
+      );
 
       const title = docTitle(type, data);
       await db.collection("project_documents").insertOne({

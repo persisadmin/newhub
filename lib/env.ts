@@ -12,6 +12,15 @@ const schema = z.object({
   PRICE_HYBRID_STRATEGY: z.string().default("weighted_average"),
   PRICE_HYBRID_CONTRACTOR_WEIGHT: z.coerce.number().min(0).max(1).default(0.6),
   UPLOAD_MAX_BYTES: z.coerce.number().default(20 * 1024 * 1024),
+  // Object storage (S3 / Cloudflare R2) for durable file persistence across
+  // deploys. When S3_BUCKET + credentials are set, files are stored remotely;
+  // otherwise the app falls back to local disk (ephemeral on Railway).
+  S3_BUCKET: z.string().optional(),
+  S3_REGION: z.string().default("auto"),
+  /** Custom endpoint for S3-compatible stores, e.g. https://<accountid>.r2.cloudflarestorage.com */
+  S3_ENDPOINT: z.string().url().optional(),
+  S3_ACCESS_KEY_ID: z.string().optional(),
+  S3_SECRET_ACCESS_KEY: z.string().optional(),
   TNG_PROVIDER: z.string().default("mock"),
   TNG_MERCHANT_ID: z.string().optional(),
   TNG_WEBHOOK_SECRET: z.string().optional(),

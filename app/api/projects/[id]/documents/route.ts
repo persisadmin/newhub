@@ -1,4 +1,3 @@
-import fs from "fs/promises";
 import path from "path";
 import { ObjectId } from "mongodb";
 import { getDb, ensureIndexes } from "@/lib/db";
@@ -8,6 +7,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { requireUser, requireOwnedProject } from "@/lib/auth-helpers";
 import { audit } from "@/lib/audit";
 import { hasActiveSubscription } from "@/lib/services/credits";
+import { putFile } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
@@ -84,11 +84,12 @@ export async function POST(req: Request, ctx: Ctx) {
     await ensureIndexes();
     const db = await getDb();
     const docId = new ObjectId();
-    const dir = path.join("data", "uploads", project._id.toString());
-    await fs.mkdir(dir, { recursive: true });
     const safeExt = ALLOWED_EXT.includes(ext) ? ext : ALLOWED_TYPES[file.type] ?? ".bin";
-    const storagePath = path.join(dir, `${docId.toString()}${safeExt}`);
-    await fs.writeFile(storagePath, Buffer.from(await file.arrayBuffer()));
+    const { storagePath } = await putFile(
+      `uploads/${project._id.toString()}/${docId.toString()}${safeExt}`,
+      Buffer.from(await file.arrayBuffer()),
+      file.type || "application/octet-stream"
+    );
 
     const record = {
       _id: docId,
