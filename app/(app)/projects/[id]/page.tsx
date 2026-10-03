@@ -292,8 +292,8 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
                 <li key={d._id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
                   <span className="flex min-w-0 items-center gap-2"><FileText size={14} className="shrink-0 text-muted-foreground" /><span className="truncate">{d.filename}</span>
                     <span className="text-xs text-muted-foreground">({(d.sizeBytes / 1024).toFixed(0)} KB)</span></span>
-                  <Button size="sm" disabled={running} onClick={() => startProcessing(d._id)}>
-                    {running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} {running ? "Processing…" : "Process"}
+                  <Button size="sm" disabled={running || project.status === "completed"} title={project.status === "completed" ? "This tender has been analysed." : undefined} onClick={() => startProcessing(d._id)}>
+                    {running ? <Loader2 size={12} className="animate-spin" /> : project.status === "completed" ? <CheckCircle2 size={12} /> : <Play size={12} />} {running ? "Processing…" : project.status === "completed" ? "Processed" : "Process"}
                   </Button>
                 </li>
               ))}
