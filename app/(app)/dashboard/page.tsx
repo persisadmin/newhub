@@ -61,7 +61,8 @@ export default async function DashboardPage() {
         <div className="flex gap-2"><Link href="/projects/new"><Button>New Project <ArrowRight size={14} /></Button></Link></div>
       </div>
 
-      <OnboardingChecklist />
+      {/* Onboarding checklist hidden for now — set NEXT_PUBLIC_ONBOARDING=1 to re-enable. */}
+      {process.env.NEXT_PUBLIC_ONBOARDING === "1" && <OnboardingChecklist />}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         {kpis.map(({ label, value, icon: Icon }) => (
