@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { Badge, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Skeleton, StatusBadge } from "@/components/ui";
+import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, EmptyState, Input, Label, Skeleton, StatusBadge } from "@/components/ui";
 import { formatMYR } from "@/lib/utils";
 
 interface AdminUser {
@@ -196,6 +196,7 @@ export default function AdminUsersPage() {
                   <p className="text-muted-foreground">No active subscription.</p>
                 )}
                 <Row label="Credit balance" value={selected.creditBalance.toLocaleString("en-MY", { maximumFractionDigits: 1 })} />
+                <GrantCreditsForm userId={selected.id} onGranted={(balance) => setSelected({ ...selected, creditBalance: balance })} />
               </Section>
 
               <Section title="Activity">
@@ -222,6 +223,58 @@ function Th({ children, onClick, active, asc, className = "" }: {
         {active && <span aria-hidden>{asc ? "↑" : "↓"}</span>}
       </button>
     </th>
+  );
+}
+
+function GrantCreditsForm({ userId, onGranted }: { userId: string; onGranted: (balance: number) => void }) {
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function grant() {
+    setMsg(null);
+    const amt = Number(amount);
+    if (!amt || amt <= 0) { setMsg({ ok: false, text: "Enter a credit amount." }); return; }
+    if (reason.trim().length < 3) { setMsg({ ok: false, text: "Give a short reason." }); return; }
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/credits`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amt, reason: reason.trim() }),
+      });
+      const json = await res.json();
+      if (json.ok) {
+        setMsg({ ok: true, text: `Granted ${amt} credits. New balance: ${json.data.balance.toLocaleString("en-MY", { maximumFractionDigits: 1 })}.` });
+        setAmount(""); setReason("");
+        onGranted(json.data.balance);
+      } else {
+        setMsg({ ok: false, text: json.error?.message ?? "Grant failed." });
+      }
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-3 space-y-2 rounded-md border border-dashed border-border p-3">
+      <p className="text-xs font-medium text-muted-foreground">Grant free credits (testing / support — no charge, no subscription change)</p>
+      <div className="flex gap-2">
+        <div className="w-28">
+          <Label htmlFor="grant-amt" className="sr-only">Credits</Label>
+          <Input id="grant-amt" type="number" min="1" max="10000" step="1" placeholder="Credits" value={amount} onChange={(e) => setAmount(e.target.value)} />
+        </div>
+        <div className="flex-1">
+          <Label htmlFor="grant-reason" className="sr-only">Reason</Label>
+          <Input id="grant-reason" placeholder="Reason (e.g. tester top-up)" value={reason} onChange={(e) => setReason(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-2">
+        {msg ? <p className={`text-xs ${msg.ok ? "text-success" : "text-destructive"}`}>{msg.text}</p> : <span />}
+        <Button size="sm" variant="outline" onClick={grant} disabled={busy}>{busy ? "Granting…" : "Grant credits"}</Button>
+      </div>
+    </div>
   );
 }
 
