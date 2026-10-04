@@ -398,3 +398,42 @@ export interface IssueCommentDoc {
   createdAt: Date;
 }
 
+/* ---------------- Helpline (user ↔ support chat) ---------------- */
+
+/** One ongoing chat thread between a user and the support team. */
+export interface SupportThreadDoc {
+  _id: ObjectId;
+  userId: ObjectId;
+  userName?: string;
+  userEmail?: string;
+  createdAt: Date;
+  /** Drives the 14-day retention TTL — bumped on every message. */
+  lastMessageAt: Date;
+  /** Last time each side read the thread (for unread badges + "seen"). */
+  userLastReadAt?: Date;
+  supportLastReadAt?: Date;
+  /** Typing indicators (30s freshness window, checked client-side). */
+  userTypingAt?: Date;
+  supportTypingAt?: Date;
+  /** When support was last emailed about unread user messages. */
+  supportNotifiedAt?: Date;
+}
+
+export type SupportMessageKind = "text" | "image";
+
+export interface SupportMessageDoc {
+  _id: ObjectId;
+  threadId: ObjectId;
+  senderRole: "user" | "support";
+  senderId: ObjectId;
+  senderName?: string;
+  kind: SupportMessageKind;
+  /** Text body (text kind; optional caption for images). */
+  body?: string;
+  /** Storage pointer for image kind (R2 or local fallback). */
+  imagePath?: string;
+  imageContentType?: string;
+  createdAt: Date;
+}
+
+

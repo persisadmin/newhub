@@ -69,5 +69,11 @@ export async function ensureIndexes(): Promise<void> {
     db.collection("price_submissions").createIndex({ kind: 1, status: 1 }),
     db.collection("issues").createIndex({ updatedAt: -1 }),
     db.collection("issue_comments").createIndex({ issueId: 1, createdAt: 1 }),
+    // Helpline chat: one thread per user; 14-day retention after last activity.
+    db.collection("support_threads").createIndex({ userId: 1 }, { unique: true }),
+    db.collection("support_threads").createIndex({ lastMessageAt: -1 }),
+    db.collection("support_threads").createIndex({ lastMessageAt: 1 }, { expireAfterSeconds: 14 * 24 * 60 * 60 }),
+    db.collection("support_messages").createIndex({ threadId: 1, createdAt: 1 }),
+    db.collection("support_messages").createIndex({ createdAt: 1 }, { expireAfterSeconds: 14 * 24 * 60 * 60 }),
   ]);
 }

@@ -7,6 +7,9 @@ const schema = z.object({
   MONGODB_DB: z.string().default("persis"),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  /** Comma-separated emails of extra support staff (besides all admins) who can
+   * answer the Helpline chat and receive new-message email notifications. */
+  SUPPORT_EMAILS: z.string().optional(),
   PRICE_OFF_BENCHMARK_THRESHOLD_PCT: z.coerce.number().default(25),
   PRICE_MATCH_CONFIDENCE_THRESHOLD: z.coerce.number().default(0.6),
   PRICE_HYBRID_STRATEGY: z.string().default("weighted_average"),
