@@ -14,12 +14,14 @@ type Ctx = { params: Promise<{ id: string }> };
 const schema = z.object({
   amount: z.coerce.number().positive("Amount must be positive.").max(10000, "Max 10,000 credits per grant."),
   reason: z.string().trim().min(3, "Give a short reason.").max(200),
+  /** When true, also activate a 1-day trial subscription so the tester can run processing. */
+  activateSubscription: z.coerce.boolean().default(false),
 });
 
 /**
  * POST /api/admin/users/[id]/credits — grant free credits to a user (testing,
- * support, goodwill). Admin-only, ledgered + audited. No payment is created and
- * no subscription is activated — this is a plain credit grant.
+ * support, goodwill). Admin-only, ledgered + audited. No payment is created.
+ * Optionally also activates a 1-day trial subscription so testers can process.
  */
 export async function POST(req: Request, ctx: Ctx) {
   try {
@@ -34,7 +36,7 @@ export async function POST(req: Request, ctx: Ctx) {
 
     const parsed = schema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? "Invalid input.", 400, "VALIDATION");
-    const { amount, reason } = parsed.data;
+    const { amount, reason, activateSubscription } = parsed.data;
 
     const db = await getDb();
     const target = await db.collection<{ _id: ObjectId; email?: string; name?: string }>("users").findOne({ _id: new ObjectId(id) });
@@ -43,16 +45,33 @@ export async function POST(req: Request, ctx: Ctx) {
     await grantCredits(new ObjectId(id), amount, `[admin grant] ${reason}`);
     const balance = await getCreditBalance(new ObjectId(id));
 
+    let subscriptionEndsAt: Date | null = null;
+    if (activateSubscription) {
+      const now = new Date();
+      subscriptionEndsAt = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 1 day
+      await db.collection("subscriptions").updateOne(
+        { userId: new ObjectId(id) },
+        {
+          $set: {
+            plan: "trial", interval: "monthly", status: "active",
+            currentPeriodStart: now, currentPeriodEnd: subscriptionEndsAt, updatedAt: now,
+          },
+          $setOnInsert: { createdAt: now },
+        },
+        { upsert: true }
+      );
+    }
+
     await audit({
       userId: admin.id,
       action: "admin.credits.granted",
       entityType: "user",
       entityId: id,
-      newValue: { targetEmail: target.email, amount, reason, balanceAfter: balance },
+      newValue: { targetEmail: target.email, amount, reason, balanceAfter: balance, activateSubscription, subscriptionEndsAt },
       source: "api",
     });
 
-    return ok({ balance, amount });
+    return ok({ balance, amount, subscriptionEndsAt });
   } catch (err) {
     return handleError(err);
   }

@@ -229,6 +229,7 @@ function Th({ children, onClick, active, asc, className = "" }: {
 function GrantCreditsForm({ userId, onGranted }: { userId: string; onGranted: (balance: number) => void }) {
   const [amount, setAmount] = useState("");
   const [reason, setReason] = useState("");
+  const [activateSub, setActivateSub] = useState(true);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
@@ -242,11 +243,14 @@ function GrantCreditsForm({ userId, onGranted }: { userId: string; onGranted: (b
       const res = await fetch(`/api/admin/users/${userId}/credits`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ amount: amt, reason: reason.trim() }),
+        body: JSON.stringify({ amount: amt, reason: reason.trim(), activateSubscription: activateSub }),
       });
       const json = await res.json();
       if (json.ok) {
-        setMsg({ ok: true, text: `Granted ${amt} credits. New balance: ${json.data.balance.toLocaleString("en-MY", { maximumFractionDigits: 1 })}.` });
+        const subNote = json.data.subscriptionEndsAt
+          ? ` Trial active until ${new Date(json.data.subscriptionEndsAt).toLocaleString("en-MY", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}.`
+          : "";
+        setMsg({ ok: true, text: `Granted ${amt} credits. New balance: ${json.data.balance.toLocaleString("en-MY", { maximumFractionDigits: 1 })}.${subNote}` });
         setAmount(""); setReason("");
         onGranted(json.data.balance);
       } else {
@@ -259,7 +263,7 @@ function GrantCreditsForm({ userId, onGranted }: { userId: string; onGranted: (b
 
   return (
     <div className="mt-3 space-y-2 rounded-md border border-dashed border-border p-3">
-      <p className="text-xs font-medium text-muted-foreground">Grant free credits (testing / support — no charge, no subscription change)</p>
+      <p className="text-xs font-medium text-muted-foreground">Grant free credits (testing / support — no charge)</p>
       <div className="flex gap-2">
         <div className="w-28">
           <Label htmlFor="grant-amt" className="sr-only">Credits</Label>
@@ -270,6 +274,10 @@ function GrantCreditsForm({ userId, onGranted }: { userId: string; onGranted: (b
           <Input id="grant-reason" placeholder="Reason (e.g. tester top-up)" value={reason} onChange={(e) => setReason(e.target.value)} />
         </div>
       </div>
+      <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+        <input type="checkbox" checked={activateSub} onChange={(e) => setActivateSub(e.target.checked)} className="h-3.5 w-3.5 rounded border-border" />
+        Also activate a 1-day trial subscription (so they can run processing)
+      </label>
       <div className="flex items-center justify-between gap-2">
         {msg ? <p className={`text-xs ${msg.ok ? "text-success" : "text-destructive"}`}>{msg.text}</p> : <span />}
         <Button size="sm" variant="outline" onClick={grant} disabled={busy}>{busy ? "Granting…" : "Grant credits"}</Button>
