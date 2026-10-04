@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { PromoBanner } from "@/components/promo-banner";
+import { SocialLinks } from "@/components/landing/social-links";
 import { Button } from "@/components/ui";
 
 export interface NavItem {
@@ -60,13 +61,16 @@ export function LandingShell({
       <footer className="border-t border-border py-10">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 text-sm text-muted-foreground sm:flex-row">
           <span>© {new Date().getFullYear()} PERSIS NEXUS SERVICES (202603129636). Tender intelligence for Malaysian contractors.</span>
-          <div className="flex gap-6">
-            <Link href="/about" className="hover:text-foreground">About</Link>
-            <Link href="/help" className="hover:text-foreground">Help</Link>
-            <Link href="/terms" className="hover:text-foreground">Terms</Link>
-            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
-            <Link href="/disclaimer" className="hover:text-foreground">Disclaimer</Link>
-            <a href="mailto:hub@persis.my" className="hover:text-foreground">Contact</a>
+          <div className="flex flex-col items-center gap-3 sm:flex-row sm:gap-6">
+            <SocialLinks />
+            <div className="flex gap-6">
+              <Link href="/about" className="hover:text-foreground">About</Link>
+              <Link href="/help" className="hover:text-foreground">Help</Link>
+              <Link href="/terms" className="hover:text-foreground">Terms</Link>
+              <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+              <Link href="/disclaimer" className="hover:text-foreground">Disclaimer</Link>
+              <a href="mailto:hub@persis.my" className="hover:text-foreground">Contact</a>
+            </div>
           </div>
         </div>
       </footer>

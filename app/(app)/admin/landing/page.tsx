@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, ExternalLink, Loader2 } from "lucide-react";
-import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Modal, Skeleton } from "@/components/ui";
+import { CheckCircle2, ExternalLink, Loader2, Share2 } from "lucide-react";
+import { Badge, Button, Card, CardContent, CardDescription, CardHeader, CardTitle, Input, Label, Modal, Skeleton } from "@/components/ui";
 
 /**
  * Admin landing-page switcher.
@@ -20,6 +20,9 @@ interface Variant {
   url: string;
 }
 
+type Socials = { facebook: string; youtube: string; tiktok: string; instagram: string };
+const EMPTY_SOCIALS: Socials = { facebook: "", youtube: "", tiktok: "", instagram: "" };
+
 export default function AdminLandingPage() {
   const [variants, setVariants] = useState<Variant[] | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -29,6 +32,10 @@ export default function AdminLandingPage() {
   const [msg, setMsg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [socials, setSocials] = useState<Socials>(EMPTY_SOCIALS);
+  const [socialsBusy, setSocialsBusy] = useState(false);
+  const [socialsMsg, setSocialsMsg] = useState<string | null>(null);
+  const [socialsError, setSocialsError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/admin/landing");
@@ -38,6 +45,7 @@ export default function AdminLandingPage() {
       setVariants(json.data.variants);
       setActive(json.data.activeVariant);
       setUpdatedAt(json.data.updatedAt);
+      setSocials({ ...EMPTY_SOCIALS, ...(json.data.socials ?? {}) });
     } else {
       setError(json.error?.message ?? "Could not load landing variants.");
     }
@@ -58,6 +66,20 @@ export default function AdminLandingPage() {
     setActive(slug);
     setMsg(`Live. The home page is now serving “${variants?.find((v) => v.slug === slug)?.name ?? slug}”.`);
     load();
+  }
+
+  async function saveSocials() {
+    setSocialsBusy(true); setSocialsMsg(null); setSocialsError(null);
+    const res = await fetch("/api/admin/landing", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ socials }),
+    });
+    const json = await res.json();
+    setSocialsBusy(false);
+    if (!json.ok) { setSocialsError(json.error?.message ?? "Could not save the social links."); return; }
+    setSocials({ ...EMPTY_SOCIALS, ...(json.data.socials ?? {}) });
+    setSocialsMsg("Saved — the landing footer now shows these links.");
   }
 
   if (forbidden) {
@@ -153,6 +175,44 @@ export default function AdminLandingPage() {
           </div>
         )}
       </Modal>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-base"><Share2 size={16} /> Social links</CardTitle>
+          <CardDescription>
+            Icons for these profiles appear in the landing-page footer. Paste the full URL of each page; leave a field
+            blank to hide that network. Changes are recorded in the audit log.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            {([
+              { key: "facebook", label: "Facebook", placeholder: "https://facebook.com/yourpage" },
+              { key: "youtube", label: "YouTube", placeholder: "https://youtube.com/@yourchannel" },
+              { key: "tiktok", label: "TikTok", placeholder: "https://tiktok.com/@yourhandle" },
+              { key: "instagram", label: "Instagram", placeholder: "https://instagram.com/yourhandle" },
+            ] as const).map(({ key, label, placeholder }) => (
+              <div key={key}>
+                <Label htmlFor={`social-${key}`}>{label}</Label>
+                <Input
+                  id={`social-${key}`}
+                  type="url"
+                  placeholder={placeholder}
+                  value={socials[key]}
+                  onChange={(e) => setSocials((s) => ({ ...s, [key]: e.target.value }))}
+                />
+              </div>
+            ))}
+          </div>
+          {socialsMsg && <p className="rounded-md bg-success/10 px-3 py-2 text-sm text-success">{socialsMsg}</p>}
+          {socialsError && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{socialsError}</p>}
+          <div className="flex justify-end">
+            <Button onClick={saveSocials} disabled={socialsBusy}>
+              {socialsBusy ? <Loader2 size={12} className="animate-spin" /> : null} Save social links
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
