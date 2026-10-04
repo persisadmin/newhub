@@ -28,6 +28,7 @@ interface ProjectData {
     contingencyPct?: number | null;
     tenderParams?: { durationDays?: number | null; workerCount?: number | null; laborRatePerDay?: number | null } | null;
     strategyNarrative?: string; strategyNarrativeAt?: string; strategyAudioParts?: number;
+    createdAt?: string; updatedAt?: string;
   };
   documents: Doc[];
   extraction: { title?: string; tenderNumber?: string; agency?: string; category?: string; closingDate?: string; rawTextLength: number; extractedAt: string } | null;
@@ -35,6 +36,12 @@ interface ProjectData {
   jobs: { _id: string; attempt: number; status: string; stage: string; startedAt: string; finishedAt?: string }[];
 }
 interface StatusData { running: boolean; currentStage: string | null; processingStartedAt?: string | null; pricing: { total: number; flagged: number; missing: number }; }
+
+/** Date + time, e.g. "5 Oct 2026, 2:30 PM". */
+function fmtDateTime(d?: string): string {
+  if (!d) return "—";
+  return new Date(d).toLocaleString("en-MY", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
 interface EstimateData {
   estimate: { credits: number; costUsd: number; multiplier: number; provider: string; model: string; estimatedTokensIn: number; estimatedTokensOut: number };
   balance: number; subscribed: boolean; freeRetry: boolean; sufficient: boolean;
@@ -193,6 +200,9 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
             <StatusBadge status={project.status} />
           </div>
           {project.tenderTitle && <p className="mt-1 text-sm text-muted-foreground">{project.tenderTitle}</p>}
+          <p className="mt-1 text-xs text-muted-foreground">
+            Created {fmtDateTime(project.createdAt)} · Last updated {fmtDateTime(project.updatedAt)}
+          </p>
         </div>
       </div>
 

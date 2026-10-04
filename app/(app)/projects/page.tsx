@@ -11,9 +11,16 @@ interface Project {
   tenderTitle?: string;
   tenderNumber?: string;
   createdAt: string;
+  updatedAt?: string;
 }
 
 const FILTERS = ["all", "draft", "processing", "awaiting_review", "completed"] as const;
+
+/** Date + time, e.g. "5 Oct 2026, 2:30 PM". */
+function fmtDateTime(d?: string): string {
+  if (!d) return "—";
+  return new Date(d).toLocaleString("en-MY", { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<Project[] | null>(null);
@@ -100,6 +107,7 @@ export default function ProjectsPage() {
                 <th className="hidden px-4 py-3 font-medium md:table-cell">Tender No.</th>
                 <th className="px-4 py-3 font-medium">Status</th>
                 <th className="hidden px-4 py-3 font-medium sm:table-cell">Created</th>
+                <th className="hidden px-4 py-3 font-medium md:table-cell">Last updated</th>
                 <th className="px-4 py-3 font-medium text-right">Actions</th>
               </tr>
             </thead>
@@ -112,7 +120,8 @@ export default function ProjectsPage() {
                   </td>
                   <td className="hidden px-4 py-3 text-muted-foreground md:table-cell">{p.tenderNumber ?? "—"}</td>
                   <td className="px-4 py-3"><StatusBadge status={p.status} /></td>
-                  <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{new Date(p.createdAt).toLocaleDateString("en-MY")}</td>
+                  <td className="hidden px-4 py-3 text-muted-foreground sm:table-cell">{fmtDateTime(p.createdAt)}</td>
+                  <td className="hidden px-4 py-3 text-muted-foreground md:table-cell">{fmtDateTime(p.updatedAt)}</td>
                   <td className="px-4 py-3">
                     <div className="flex justify-end gap-1">
                       <Button variant="ghost" size="icon" disabled={busy} onClick={() => archive(p)} aria-label="Archive project"><Archive size={14} /></Button>
