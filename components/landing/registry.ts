@@ -3,6 +3,9 @@ import DefaultLanding from "./variants/default";
 import SpeedLanding from "./variants/speed";
 import RiskLanding from "./variants/risk";
 import RoiLanding from "./variants/roi";
+import BmLajuLanding from "./variants/bm-laju";
+import BmMarginLanding from "./variants/bm-margin";
+import BmHargaLanding from "./variants/bm-harga";
 
 /**
  * The landing-variant registry — the single source of truth for which landing
@@ -70,6 +73,36 @@ export const LANDING_VARIANTS: LandingVariant[] = [
     metaDescription:
       "Manual tender analysis costs RM 800–2,000 in labour per tender. PERSIS packages start at RM 299, and credits never expire.",
     Component: RoiLanding,
+  },
+  {
+    slug: "bm-laju",
+    name: "Bida Lebih Banyak Tender (BM)",
+    description: "Versi Bahasa Melayu — sudut kelajuan dan kapasiti membida.",
+    status: "live",
+    title: "PERSIS — Analisis Tender dalam Minit, Bukan Hari",
+    metaDescription:
+      "Muat naik tender pada waktu pagi dan dapatkan Bill of Quantities berharga sebelum tengah hari. Dibina untuk kontraktor Malaysia yang membida setiap minggu.",
+    Component: BmLajuLanding,
+  },
+  {
+    slug: "bm-margin",
+    name: "Lindungi Margin Anda (BM)",
+    description: "Versi Bahasa Melayu — sudut risiko dan perlindungan margin.",
+    status: "live",
+    title: "PERSIS — Lindungi Margin Tender Anda",
+    metaDescription:
+      "PERSIS membenderakan harga yang hilang, kadar menyimpang, padanan lemah dan ketidakpadanan unit sebelum anda menghantar — dan merekodkan sumber setiap angka.",
+    Component: BmMarginLanding,
+  },
+  {
+    slug: "bm-harga",
+    name: "Kes Komersial (BM)",
+    description: "Versi Bahasa Melayu — sudut ROI dengan harga pakej dipaparkan (telus harga).",
+    status: "live",
+    title: "PERSIS — Satu Tender Membayar Setahun",
+    metaDescription:
+      "Analisis tender manual menelan kos RM 800–2,000 buruh setiap tender. Pakej PERSIS bermula pada RM 299, dan kredit tidak pernah luput.",
+    Component: BmHargaLanding,
   },
 ];
 
