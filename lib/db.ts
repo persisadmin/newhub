@@ -67,5 +67,7 @@ export async function ensureIndexes(): Promise<void> {
     db.collection("credit_ledger").createIndex({ userId: 1, createdAt: -1 }),
     db.collection("price_submissions").createIndex({ userId: 1, createdAt: -1 }),
     db.collection("price_submissions").createIndex({ kind: 1, status: 1 }),
+    db.collection("issues").createIndex({ updatedAt: -1 }),
+    db.collection("issue_comments").createIndex({ issueId: 1, createdAt: 1 }),
   ]);
 }

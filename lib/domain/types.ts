@@ -369,3 +369,32 @@ export interface ProcessingJobDoc {
   startedAt: Date;
   finishedAt?: Date;
 }
+
+/* ---------------- Admin issues board ---------------- */
+
+export type IssueStatus = "open" | "in_progress" | "done";
+
+/** An internal issue raised by an admin for discussion among the admin team. */
+export interface IssueDoc {
+  _id: ObjectId;
+  title: string;
+  description: string;
+  status: IssueStatus;
+  createdBy: ObjectId;
+  createdByName?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  /** Denormalised for list display. */
+  commentCount: number;
+}
+
+/** A feedback comment on an issue, written by an admin. */
+export interface IssueCommentDoc {
+  _id: ObjectId;
+  issueId: ObjectId;
+  body: string;
+  createdBy: ObjectId;
+  createdByName?: string;
+  createdAt: Date;
+}
+
