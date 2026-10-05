@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { extractText } from "@/lib/services/extraction";
 import { chat } from "@/lib/services/llm/providers";
 import { parseLlmJson } from "@/lib/services/llm/parse-json";
+import { parseTableRows, isConfidentTableParse } from "@/lib/services/price-table-parse";
 import { normaliseDescription, normaliseUnit } from "@/lib/domain/pricing/normalise";
 import type {
   PriceSubmissionDoc,
@@ -25,8 +26,10 @@ import type {
  *   benchmarks.
  */
 
-const CHUNK_CHARS = 12_000;
+const CHUNK_CHARS = 32_000;
 const MAX_TOTAL_CHARS = 600_000;
+/** Max simultaneous LLM calls during the chunked fallback parse. */
+const PARSE_CONCURRENCY = 4;
 
 function buildParsePrompt(kind: PriceSubmissionKind): string {
   const what =
@@ -51,8 +54,31 @@ TEXT:
 }
 
 /** LLM-extract priced rows from raw document text (chunked for long lists). */
+/**
+ * Extract priced rows from raw document text.
+ *
+ * Fast path: a rule-based parser handles well-structured schedules (like the
+ * JKR schedule of rates) instantly with no LLM call. If that parse isn't
+ * confident, the text is chunked and parsed by the LLM — with the chunk calls
+ * run concurrently (bounded) instead of sequentially, which is several times
+ * faster on long documents.
+ */
 export async function parsePriceRows(text: string, kind: PriceSubmissionKind): Promise<PriceRow[]> {
   const trimmed = text.length > MAX_TOTAL_CHARS ? text.slice(0, MAX_TOTAL_CHARS) : text;
+
+  // Fast path: structured table → rule-based extraction, no LLM.
+  try {
+    const table = parseTableRows(trimmed);
+    if (isConfidentTableParse(table)) {
+      logger.info("prices.parse_rule_based", { kind, rows: table.rows.length, coverage: table.coverage.toFixed(2) });
+      return table.rows.map((r) => ({ description: r.description, unit: r.unit, price: r.price }));
+    }
+    logger.info("prices.parse_rule_low_confidence", { kind, rows: table.rows.length, coverage: table.coverage.toFixed(2), unparsed: table.unparsedCount });
+  } catch (err) {
+    logger.warn("prices.parse_rule_failed", { kind, error: String(err) });
+  }
+
+  // Fallback: chunked LLM extraction, chunks processed concurrently.
   const chunks: string[] = [];
   let start = 0;
   while (start < trimmed.length) {
@@ -68,7 +94,8 @@ export async function parsePriceRows(text: string, kind: PriceSubmissionKind): P
 
   const rows: PriceRow[] = [];
   const seen = new Set<string>();
-  for (const [idx, c] of chunks.entries()) {
+
+  const parseChunk = async (c: string, idx: number): Promise<PriceRow[]> => {
     try {
       const raw = await chat(
         [
@@ -79,22 +106,39 @@ export async function parsePriceRows(text: string, kind: PriceSubmissionKind): P
         "price_list_parse"
       );
       const parsed = parseLlmJson(raw);
-      if (!Array.isArray(parsed)) continue;
+      if (!Array.isArray(parsed)) return [];
+      const out: PriceRow[] = [];
       for (const r of parsed as Array<Record<string, unknown>>) {
         const description = String(r.description ?? "").trim();
         const unit = String(r.unit ?? "").trim();
         const price = Number(r.price);
         if (!description || !unit || !isFinite(price) || price <= 0) continue;
-        const key = `${normaliseDescription(description)}|${normaliseUnit(unit) ?? unit.toLowerCase()}|${price}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push({ description, unit, price: Math.round(price * 100) / 100 });
+        out.push({ description, unit, price: Math.round(price * 100) / 100 });
       }
-      logger.info("prices.parse_chunk", { kind, chunk: idx, rows: rows.length });
+      logger.info("prices.parse_chunk", { kind, chunk: idx, rows: out.length });
+      return out;
     } catch (err) {
       logger.warn("prices.parse_chunk_failed", { kind, chunk: idx, error: String(err) });
+      return [];
     }
-  }
+  };
+
+  // Bounded-concurrency fan-out over chunks.
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(PARSE_CONCURRENCY, chunks.length) }, async () => {
+    while (cursor < chunks.length) {
+      const idx = cursor++;
+      const chunkRows = await parseChunk(chunks[idx], idx);
+      for (const r of chunkRows) {
+        const key = `${normaliseDescription(r.description)}|${normaliseUnit(r.unit) ?? r.unit.toLowerCase()}|${r.price}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(r);
+      }
+    }
+  });
+  await Promise.all(workers);
+
   return rows;
 }
 
