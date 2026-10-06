@@ -374,7 +374,7 @@ export interface ProcessingJobDoc {
   documentId: ObjectId;
   attempt: number;
   stage: PipelineStage;
-  status: "running" | "completed" | "failed" | "cancelled";
+  status: "running" | "completed" | "failed" | "cancelled" | "awaiting_choice" | "refunded";
   error?: string;
   startedAt: Date;
   finishedAt?: Date;

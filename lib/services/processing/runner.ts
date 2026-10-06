@@ -172,7 +172,9 @@ async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt:
       );
       await db.collection<ProcessingJobDoc>("processing_jobs").updateOne(
         { projectId: pid, attempt },
-        { $set: { status: "failed", error: "Lump-sum tender — awaiting user choice", finishedAt: new Date() } }
+        // Not a failure — Gate 1 intentionally stopped. 'awaiting_choice' keeps the
+        // free-retry logic (which keys off status 'failed') from misfiring.
+        { $set: { status: "awaiting_choice", error: "Lump-sum tender — awaiting user choice", finishedAt: new Date() } }
       );
       await audit({
         userId: uid,
@@ -303,7 +305,9 @@ async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt:
         );
         await db.collection<ProcessingJobDoc>("processing_jobs").updateOne(
           { projectId: pid, attempt },
-          { $set: { status: "failed", error: "Degenerate extraction — refunded", finishedAt: new Date() } }
+          // Credits already refunded — 'refunded' (not 'failed') so the free-retry
+          // logic doesn't ALSO grant a free attempt on top of the refund.
+          { $set: { status: "refunded", error: "Degenerate extraction — refunded", finishedAt: new Date() } }
         );
         await audit({
           userId: uid,

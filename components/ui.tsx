@@ -165,6 +165,8 @@ export function StatusBadge({ status }: { status: string }) {
     cancelled: { label: "Cancelled", variant: "outline" },
     verified: { label: "Verified", variant: "success" },
     failed: { label: "Failed", variant: "destructive" },
+    awaiting_choice: { label: "Awaiting Choice", variant: "warning" },
+    refunded: { label: "Refunded", variant: "success" },
     qr_presented: { label: "Awaiting Payment", variant: "warning" },
     paid_pending_verify: { label: "Verifying", variant: "warning" },
   };
