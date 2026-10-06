@@ -72,6 +72,13 @@ export interface ProjectDoc {
   strategyAudioParts?: number;
   /** One free retry per project: set after a failed first paid attempt is retried. */
   freeRetryUsed?: boolean;
+  /** Gate 1 classification of the uploaded tender document. */
+  docType?: "measured_boq" | "lumpsum" | "schedule_of_rates" | "unreadable";
+  /** True when a lump-sum tender is waiting on the user to choose the derived-BOQ path. */
+  lumpsumPendingChoice?: boolean;
+  /** Gate 2: set when an extraction was judged degenerate and credits were auto-refunded. */
+  degenerateRefundAt?: Date;
+  degenerateReason?: string;
   createdAt: Date;
   updatedAt: Date;
   archivedAt?: Date;
@@ -125,6 +132,9 @@ export interface BoqItemDoc {
   quantity: number | null;
   unit: string | null;
   normalisedUnit: string | null;
+  /** True when this item was derived (provisional BOQ from a lump-sum tender),
+   *  so its quantity is an estimate — never a measured quantity from the document. */
+  estimated?: boolean;
   createdAt: Date;
 }
 

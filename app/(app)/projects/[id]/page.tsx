@@ -10,7 +10,7 @@ import { StrategyBriefing } from "@/components/strategy-briefing";
 
 /* ---------- types ---------- */
 interface Doc { _id: string; filename: string; sizeBytes: number; uploadedAt: string; }
-interface BoqItem { _id: string; itemNo: string; description: string; normalisedDescription: string; category: string; quantity: number | null; unit: string | null; }
+interface BoqItem { _id: string; itemNo: string; description: string; normalisedDescription: string; category: string; quantity: number | null; unit: string | null; estimated?: boolean; }
 interface PricingRecord {
   _id: string; description: string; normalisedDescription: string; category: string;
   quantity: number | null; unit: string | null;
@@ -29,6 +29,9 @@ interface ProjectData {
     tenderParams?: { durationDays?: number | null; workerCount?: number | null; laborRatePerDay?: number | null } | null;
     strategyNarrative?: string; strategyNarrativeAt?: string; strategyAudioParts?: number;
     createdAt?: string; updatedAt?: string;
+    docType?: "measured_boq" | "lumpsum" | "schedule_of_rates" | "unreadable";
+    lumpsumPendingChoice?: boolean;
+    degenerateReason?: string;
   };
   documents: Doc[];
   extraction: { title?: string; tenderNumber?: string; agency?: string; category?: string; closingDate?: string; rawTextLength: number; extractedAt: string } | null;
@@ -94,6 +97,7 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
   const [estimate, setEstimate] = useState<EstimateData | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [needsTopUp, setNeedsTopUp] = useState<string | null>(null);
+  const [deriveIntent, setDeriveIntent] = useState(false); // user chose the lump-sum derived-BOQ path
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -158,11 +162,11 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
   }
 
   /** Step 2: user confirmed — start the pipeline (server re-checks and deducts). */
-  async function confirmProcessing() {
+  async function confirmProcessing(deriveBoq = false) {
     if (!estimateFor) return;
     setConfirming(true);
     const res = await fetch(`/api/projects/${id}/process`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId: estimateFor }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId: estimateFor, deriveBoq }),
     });
     const json = await res.json();
     setConfirming(false);
@@ -213,7 +217,42 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
           <a href="/settings"><Button size="sm">Top up credits</Button></a>
         </p>
       )}
-      {project.processingError && <p role="alert" className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">{project.processingError}</p>}
+      {project.processingError && !project.lumpsumPendingChoice && (
+        <p role="alert" className={`rounded-md px-3 py-2 text-sm ${project.degenerateReason ? "bg-warning/10 text-warning-foreground" : "bg-destructive/10 text-destructive"}`}>
+          {project.processingError}
+        </p>
+      )}
+
+      {/* Lump-sum tender: offer the derived-BOQ path instead of a junk extraction */}
+      {project.lumpsumPendingChoice && (
+        <Card className="border-primary/40 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="text-base">This looks like a lump-sum tender</CardTitle>
+            <CardDescription>
+              We found no measured bill of quantities — the works are described by scope and specification only.
+              Processing it the normal way would produce a poor result, so we stopped before charging you for it.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm">
+              PERSIS can instead <strong>derive a provisional bill of quantities</strong> from the scope — real work items
+              with <em>estimated</em> quantities (clearly marked) plus the crew, plant and method assumptions, priced
+              against your library and benchmarks. You confirm and adjust the estimates before using them.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {data.documents[0] && (
+                <Button onClick={() => { setDeriveIntent(true); startProcessing(data.documents[0]._id); }} disabled={running}>
+                  <Play size={12} /> Derive provisional BOQ
+                </Button>
+              )}
+              <Button variant="outline" onClick={() => pollStatus()}>Dismiss</Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The processing cost is the same as a normal tender (estimated tokens × the credit multiplier); you&apos;ll confirm it on the next step.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Processing pipeline */}
       {(running || project.currentStage) && (
@@ -366,11 +405,16 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
       />
 
       {/* Credit cost confirmation */}
-      <Modal open={!!estimateFor} onClose={() => { setEstimateFor(null); setEstimate(null); }} title="Confirm processing">
+      <Modal open={!!estimateFor} onClose={() => { setEstimateFor(null); setEstimate(null); setDeriveIntent(false); }} title={deriveIntent ? "Derive provisional BOQ" : "Confirm processing"}>
         {!estimate ? (
           <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground"><Loader2 size={16} className="animate-spin" /> Estimating cost…</div>
         ) : (
           <div className="space-y-4">
+            {deriveIntent && (
+              <p className="rounded-md bg-primary/10 px-3 py-2 text-sm">
+                PERSIS will derive a provisional bill of quantities from the scope. Quantities are <strong>estimates</strong> (clearly marked) — review and adjust them before pricing.
+              </p>
+            )}
             <div className="rounded-md bg-muted p-4 text-sm space-y-1">
               {estimate.freeRetry ? (
                 <p className="font-medium text-success">Free retry — your previous attempt failed, so this one is on us.</p>
@@ -396,10 +440,10 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
               </p>
             )}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => { setEstimateFor(null); setEstimate(null); }}>Cancel</Button>
-              <Button onClick={confirmProcessing} disabled={confirming || !estimate.subscribed || (!estimate.freeRetry && !estimate.sufficient)}>
+              <Button variant="outline" onClick={() => { setEstimateFor(null); setEstimate(null); setDeriveIntent(false); }}>Cancel</Button>
+              <Button onClick={() => { const d = deriveIntent; setDeriveIntent(false); confirmProcessing(d); }} disabled={confirming || !estimate.subscribed || (!estimate.freeRetry && !estimate.sufficient)}>
                 {confirming && <Loader2 size={12} className="animate-spin" />}
-                {estimate.freeRetry ? "Start free retry" : `Process for ${estimate.estimate.credits} credits`}
+                {estimate.freeRetry ? "Start free retry" : `${deriveIntent ? "Derive BOQ" : "Process"} for ${estimate.estimate.credits} credits`}
               </Button>
             </div>
           </div>
@@ -461,7 +505,10 @@ function BoqTable({ items }: { items: BoqItem[] }) {
             <tr key={it._id} className="hover:bg-muted/40">
               <td className="px-4 py-3 text-muted-foreground">{it.itemNo}</td>
               <td className="px-4 py-3">
-                <p className="font-medium">{it.description}</p>
+                <p className="font-medium">
+                  {it.description}
+                  {it.estimated && <Badge variant="warning" className="ml-2">Estimated</Badge>}
+                </p>
                 {it.normalisedDescription !== it.description.toLowerCase() && (
                   <p className="mt-0.5 text-xs text-muted-foreground">normalised: {it.normalisedDescription}</p>
                 )}

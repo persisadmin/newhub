@@ -7,8 +7,11 @@ import type { PipelineStage, ProjectDoc, ProcessingJobDoc } from "@/lib/domain/t
 import { extractText, extractTenderInfo, parseBoqLinesWithStats, normaliseItem } from "@/lib/services/extraction";
 import type { ParsedBoqLine } from "@/lib/services/extraction";
 import { isLlmConfigured, getLlmFeatures } from "@/lib/services/llm/kimi";
-import { analyseRequirements, generateBoq, boqToParsedLines } from "@/lib/services/llm/boq-extractor";
+import { analyseRequirements, generateBoq, boqToParsedLines, deriveProvisionalBoq } from "@/lib/services/llm/boq-extractor";
 import type { TenderManifest } from "@/lib/services/llm/boq-extractor";
+import { classifyTenderDocument } from "@/lib/services/tender-classify";
+import { scoreBoqQuality } from "@/lib/services/boq-quality";
+import { refundCredits } from "@/lib/services/credits";
 import { looksScanned, ocrPdf } from "@/lib/services/ocr";
 import { generateProjectDocuments } from "@/lib/services/documents/generation";
 
@@ -59,12 +62,12 @@ export function isRunning(projectId: string): boolean {
 }
 
 /** Fire-and-forget pipeline execution. Returns immediately. */
-export function startProcessing(projectId: string, documentId: string, userId: string, attempt: number): void {
+export function startProcessing(projectId: string, documentId: string, userId: string, attempt: number, opts: { deriveBoq?: boolean } = {}): void {
   const pid = new ObjectId(projectId);
   const did = new ObjectId(documentId);
   const uid = new ObjectId(userId);
   running.set(projectId, { cancelled: false });
-  runPipeline(pid, did, uid, attempt)
+  runPipeline(pid, did, uid, attempt, opts)
     .catch(async (err) => {
       logger.error("pipeline.failed", { projectId, error: String(err) });
       const db = await getDb();
@@ -85,7 +88,7 @@ async function checkCancelled(projectId: string): Promise<void> {
   await tick();
 }
 
-async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt: number): Promise<void> {
+async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt: number, opts: { deriveBoq?: boolean } = {}): Promise<void> {
   await ensureIndexes();
   const db = await getDb();
   const key = String(pid);
@@ -142,20 +145,70 @@ async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt:
       );
     }
 
+    // Gate 1 — classify the document type (free, rule-based, no LLM).
+    const classification = classifyTenderDocument(text);
+    logger.info("tender.classified", { projectId: pid.toString(), type: classification.type, confidence: classification.confidence.toFixed(2), ...classification.signals });
+    await db.collection<ProjectDoc>("projects").updateOne(
+      { _id: pid },
+      { $set: { docType: classification.type, updatedAt: new Date() } }
+    );
+
+    // Lump-sum tender without an explicit derive choice → stop here, do NOT
+    // extract a junk BOQ. The user is offered the derived-BOQ path in the UI.
+    if (classification.type === "lumpsum" && !opts.deriveBoq) {
+      await db.collection<ProjectDoc>("projects").updateOne(
+        { _id: pid },
+        {
+          $set: {
+            status: "draft",
+            lumpsumPendingChoice: true,
+            currentStage: undefined,
+            processingError:
+              "This looks like a lump-sum tender with no measured bill of quantities. " +
+              "Choose how you'd like to proceed below.",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      await db.collection<ProcessingJobDoc>("processing_jobs").updateOne(
+        { projectId: pid, attempt },
+        { $set: { status: "failed", error: "Lump-sum tender — awaiting user choice", finishedAt: new Date() } }
+      );
+      await audit({
+        userId: uid,
+        action: "tender.lumpsum_detected",
+        entityType: "project",
+        entityId: pid,
+        newValue: { attempt, confidence: classification.confidence },
+        source: "pipeline",
+      });
+      return;
+    }
+
     // Stage 4/5: material & work extraction — LLM (Kimi) primary, regex fallback
     await setStage(pid, "material_extraction");
     await checkCancelled(key);
     let lines: ParsedBoqLine[] = [];
-    let extractionMethod: "llm" | "regex" | null = null;
+    let extractionMethod: "llm" | "regex" | "derived" | null = null;
     let manifest: TenderManifest | null = null;
+    let derivedEstimated = false;
 
     if (await isLlmConfigured()) {
       try {
         manifest = await analyseRequirements(text);
-        const boq = await generateBoq(text, manifest);
-        lines = boqToParsedLines(boq);
-        extractionMethod = "llm";
-        logger.info("boq.llm_extracted", { projectId: pid.toString(), items: lines.length });
+        if (opts.deriveBoq || classification.type === "lumpsum") {
+          // Lump-sum path (Option B): derive a provisional BOQ from scope + spec.
+          const boq = await deriveProvisionalBoq(text, manifest);
+          lines = boqToParsedLines(boq);
+          extractionMethod = "derived";
+          derivedEstimated = true;
+          logger.info("boq.derived", { projectId: pid.toString(), items: lines.length });
+        } else {
+          const boq = await generateBoq(text, manifest);
+          lines = boqToParsedLines(boq);
+          extractionMethod = "llm";
+          logger.info("boq.llm_extracted", { projectId: pid.toString(), items: lines.length });
+        }
       } catch (err) {
         logger.warn("boq.llm_failed_fallback_regex", { projectId: pid.toString(), error: String(err) });
       }
@@ -189,6 +242,8 @@ async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt:
           tenderAgency: manifest?.client ?? info.agency,
           tenderCategory: manifest?.project_type ?? info.category,
           closingDate: parseDeadline(manifest?.submission_deadline) ?? info.closingDate,
+          // Past Gate 1 — clear any lump-sum pending flag.
+          lumpsumPendingChoice: false,
         },
       }
     );
@@ -204,13 +259,71 @@ async function runPipeline(pid: ObjectId, did: ObjectId, uid: ObjectId, attempt:
     await checkCancelled(key);
     const normalised = lines.map(normaliseItem);
 
+    // Gate 2 — score the extraction quality. A degenerate result (e.g. the
+    // Kajang case: a few admin clauses scraped from conditions) is NOT
+    // chargeable: auto-refund and stop before pricing.
+    // Derived lump-sum BOQs skip this gate (their quantities are intentionally
+    // estimates; the user explicitly opted into that product).
+    if (!derivedEstimated) {
+      const quality = scoreBoqQuality({
+        items: normalised.map((n) => ({ description: n.description, category: n.category, quantity: n.quantity, unit: n.unit })),
+        sourceText: text,
+      });
+      logger.info("boq.quality", { projectId: pid.toString(), score: quality.score, degenerate: quality.degenerate, ...quality.breakdown });
+      if (quality.degenerate) {
+        const reason = quality.reasons.slice(0, 2).join("; ") || "extraction quality too low";
+        // Auto-refund whatever this attempt was charged (skip for admins / free retries).
+        const chargeEntry = await db.collection("credit_ledger").findOne(
+          { projectId: pid, attempt, type: "deduction" },
+          { projection: { amount: 1 } }
+        );
+        let refunded = 0;
+        if (chargeEntry && typeof chargeEntry.amount === "number" && chargeEntry.amount < 0) {
+          refunded = -chargeEntry.amount;
+          await refundCredits(uid, refunded, `Auto-refund — extraction quality too low (${reason})`, {
+            projectId: pid,
+            attempt,
+            meta: { documentId: String(did) },
+          });
+        }
+        await db.collection<ProjectDoc>("projects").updateOne(
+          { _id: pid },
+          {
+            $set: {
+              status: "draft",
+              currentStage: undefined,
+              degenerateRefundAt: new Date(),
+              degenerateReason: reason,
+              processingError:
+                `We couldn't extract a usable bill of quantities from this document (${reason}). ` +
+                (refunded > 0 ? `You were not charged — ${refunded} credit(s) have been refunded.` : "You were not charged."),
+              updatedAt: new Date(),
+            },
+          }
+        );
+        await db.collection<ProcessingJobDoc>("processing_jobs").updateOne(
+          { projectId: pid, attempt },
+          { $set: { status: "failed", error: "Degenerate extraction — refunded", finishedAt: new Date() } }
+        );
+        await audit({
+          userId: uid,
+          action: "tender.degenerate_refunded",
+          entityType: "project",
+          entityId: pid,
+          newValue: { attempt, score: quality.score, refunded, reason },
+          source: "pipeline",
+        });
+        return;
+      }
+    }
+
     // Stage 6: BOQ generation
     await setStage(pid, "boq_generation");
     await checkCancelled(key);
     await db.collection("boq_items").deleteMany({ projectId: pid });
     if (normalised.length) {
       await db.collection("boq_items").insertMany(
-        normalised.map((n) => ({ ...n, projectId: pid, createdAt: new Date() }))
+        normalised.map((n) => ({ ...n, projectId: pid, ...(derivedEstimated ? { estimated: true } : {}), createdAt: new Date() }))
       );
     }
 

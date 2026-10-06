@@ -145,6 +145,20 @@ export async function deductCredits(
   return Math.round((balance - amount) * 10) / 10;
 }
 
+/**
+ * Refund credits (e.g. Gate-2 auto-refund when an extraction is judged
+ * degenerate). Positive immutable ledger entry; never throws on balance.
+ */
+export async function refundCredits(
+  userId: ObjectId,
+  amount: number,
+  reason: string,
+  opts: { projectId?: ObjectId; attempt?: number; meta?: CreditLedgerDoc["meta"] } = {}
+): Promise<number> {
+  await appendEntry({ userId, type: "refund", amount, reason, ...opts });
+  return getCreditBalance(userId);
+}
+
 export async function listCreditHistory(userId: ObjectId, limit = 50): Promise<CreditLedgerDoc[]> {
   const db = await getDb();
   return db

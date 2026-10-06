@@ -385,3 +385,98 @@ export function boqToParsedLines(boq: BoqResult): ParsedBoqLine[] {
   }
   return lines;
 }
+
+/**
+ * Lump-sum path (Option B) — DERIVE a provisional BOQ from scope + specification.
+ *
+ * A lump-sum tender carries no measured quantities: the works are described by
+ * the scope, spec and drawings. This asks the LLM to act as the experienced
+ * contractor — read the whole document, then produce a sensible provisional BOQ
+ * with ESTIMATED quantities and the resource/method assumptions recorded per
+ * item. Every item is later flagged `estimated: true` so it is unmistakable in
+ * the UI and never mistaken for a measured quantity.
+ */
+export async function deriveProvisionalBoq(text: string, manifest: TenderManifest | null): Promise<BoqResult> {
+  const scope = manifest
+    ? `PROJECT CONTEXT (from requirements analysis):
+- Project: ${manifest.project_title || "Unknown"}
+- Type: ${manifest.project_type || "Unknown"}
+- Location: ${manifest.location || "Unknown"}
+- Scope: ${manifest.scope_summary || ""}
+- Work trades: ${(manifest.work_trades || []).join(", ")}
+- Duration: ${manifest.estimated_duration || "Not stated"}
+
+`
+    : "";
+
+  const prompt = `${scope}TASK: This is a LUMP-SUM tender — it has NO measured bill of quantities. The works are described only by the scope of works and technical specification.
+
+Act as an experienced Malaysian contractor who has just read the whole document. DERIVE a sensible PROVISIONAL bill of quantities that a contractor would build up to price this lump-sum job.
+
+For EACH work item:
+- Describe the real physical work (not admin clauses like bonds or insurance).
+- Give an ESTIMATED quantity and unit based on the scope, drawings, typical dimensions and your experience. Where the document gives lengths/areas/quantities anywhere, use them; otherwise estimate reasonably and note the basis.
+- In "notes", record the assumption behind the quantity AND the key resources you would deploy (crew size, plant/equipment) — the things the document does NOT state but a contractor infers.
+
+Cover the full job: preliminaries/site setup, the main trades in practical order, and finishing/external works. Group items into logical sections.
+
+Return ONLY this JSON:
+{
+  "project_title": "string",
+  "project_ref": "string or null",
+  "sections": [
+    {
+      "section_no": "string",
+      "section_title": "string",
+      "items": [
+        {
+          "item_no": "string",
+          "description": "string — the physical work",
+          "unit": "string",
+          "quantity": number,
+          "notes": "string — assumption behind the qty + crew/plant you'd deploy"
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "total_sections": number,
+    "total_items": number,
+    "notes": "string — state clearly that all quantities are provisional estimates, not measured"
+  }
+}`;
+
+  // Use the whole document for derivation (scope is usually near the front, but
+  // specs/dimensions can be anywhere) — chunked like generateBoq if very long.
+  const chunks = chunkText(text);
+  if (chunks.length === 1) {
+    const raw = await chat(
+      [
+        { role: "system", content: GENERATION_SYSTEM },
+        { role: "user", content: `TENDER DOCUMENT:\n\n${chunks[0]}\n\n---\n\n${prompt}` },
+      ],
+      16000,
+      "derive-boq"
+    );
+    const result = parseLlmJsonObject(raw) as unknown as BoqResult;
+    if (!hasItems(result)) throw new Error("Derived BOQ returned no items");
+    return result;
+  }
+
+  // For long lump-sum docs, derive from a bounded slice rich in scope+spec:
+  // the front (scope) plus the middle (specs) usually carries the most signal.
+  const front = chunks[0];
+  const middle = chunks[Math.floor(chunks.length / 2)];
+  const combined = `${front}\n\n...\n\n${middle}`.slice(0, CHUNK_SIZE * 2);
+  const raw = await chat(
+    [
+      { role: "system", content: GENERATION_SYSTEM },
+      { role: "user", content: `TENDER DOCUMENT (key sections):\n\n${combined}\n\n---\n\n${prompt}` },
+    ],
+    16000,
+    "derive-boq"
+  );
+  const result = parseLlmJsonObject(raw) as unknown as BoqResult;
+  if (!hasItems(result)) throw new Error("Derived BOQ returned no items");
+  return result;
+}

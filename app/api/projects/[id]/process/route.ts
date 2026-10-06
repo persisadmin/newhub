@@ -14,7 +14,7 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string }> };
 
-const startSchema = z.object({ documentId: z.string() });
+const startSchema = z.object({ documentId: z.string(), deriveBoq: z.boolean().optional() });
 
 export async function POST(req: Request, ctx: Ctx) {
   try {
@@ -22,7 +22,7 @@ export async function POST(req: Request, ctx: Ctx) {
     const { id } = await ctx.params;
     await requireOwnedProject(id, user);
     if (isRunning(id)) return fail("Processing is already running for this project.", 409, "BUSY");
-    const { documentId } = startSchema.parse(await req.json());
+    const { documentId, deriveBoq } = startSchema.parse(await req.json());
     if (!ObjectId.isValid(documentId)) return fail("Invalid document.", 422, "VALIDATION");
     await ensureIndexes();
     const db = await getDb();
@@ -85,7 +85,7 @@ export async function POST(req: Request, ctx: Ctx) {
       projectId: new ObjectId(id), userId: new ObjectId(user.id), documentId: new ObjectId(documentId),
       attempt, stage: "document_processing", status: "running", startedAt: new Date(),
     });
-    startProcessing(id, documentId, user.id, attempt);
+    startProcessing(id, documentId, user.id, attempt, { deriveBoq: Boolean(deriveBoq) });
     await audit({ userId: user.id, action: "tender.processing_started", entityType: "project", entityId: id, newValue: { attempt, documentId, charged }, source: "api" });
     return ok({ attempt, charged }, 202);
   } catch (err) {
