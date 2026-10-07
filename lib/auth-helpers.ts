@@ -2,6 +2,7 @@ import { ObjectId } from "mongodb";
 import { auth } from "@/auth";
 import { getDb, ensureIndexes } from "./db";
 import { HttpError } from "./api";
+import { isMaintenanceMode } from "./services/maintenance";
 import type { ProjectDoc, Role } from "./domain/types";
 
 export interface SessionUser {
@@ -11,15 +12,21 @@ export interface SessionUser {
   role: Role;
 }
 
-/** Require an authenticated session; throws HttpError(401) otherwise. */
+/** Require an authenticated session; throws HttpError(401) otherwise.
+ *  During maintenance mode, non-admins are blocked with 503 — this halts
+ *  existing sessions' API calls, not just new sign-ins. */
 export async function requireUser(): Promise<SessionUser> {
   const session = await auth();
   if (!session?.user?.id) throw new HttpError(401, "Authentication required", "UNAUTHENTICATED");
+  const role = ((session.user as { role?: Role }).role ?? "contractor") as Role;
+  if (role !== "admin" && (await isMaintenanceMode())) {
+    throw new HttpError(503, "PERSIS is temporarily down for maintenance. Please try again shortly.", "MAINTENANCE");
+  }
   return {
     id: session.user.id,
     email: session.user.email ?? "",
     name: session.user.name ?? "",
-    role: ((session.user as { role?: Role }).role ?? "contractor") as Role,
+    role,
   };
 }
 
