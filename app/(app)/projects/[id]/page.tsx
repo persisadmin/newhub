@@ -194,6 +194,17 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
   const running = status?.running ?? false;
   const flagged = pricing?.filter((p) => p.reviewFlag) ?? [];
 
+  // State-driven journey: a fresh draft surfaces ONE next action (upload, then
+  // process); the full workspace (tabs, strategy, deliverables) appears only
+  // once there's output to work on. This removes the "everything at once"
+  // clutter that left new users lost.
+  const hasDocs = data.documents.length > 0;
+  const hasBoq = data.boqItems.length > 0;
+  const showWorkspace = hasBoq || running || project.status === "completed" || project.status === "awaiting_review";
+  // "upload" = no document yet; "process" = document uploaded, not yet run; null = workspace handles it.
+  const nextAction: "upload" | "process" | null =
+    project.lumpsumPendingChoice || running || showWorkspace ? null : hasDocs ? "process" : "upload";
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -254,6 +265,44 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
         </Card>
       )}
 
+      {/* Focused next action — a fresh draft shows ONE thing to do, not the whole workspace */}
+      {nextAction === "upload" && (
+        <Card className="border-primary/40">
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary"><UploadCloud size={24} /></span>
+            <div>
+              <h2 className="text-lg font-semibold">Upload your tender document</h2>
+              <p className="mt-1 text-sm text-muted-foreground">PDF, DOCX or TXT — up to 20MB. This is the only step needed to get started.</p>
+            </div>
+            <input ref={fileRef} type="file" accept=".pdf,.docx,.txt" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
+            <Button size="lg" onClick={() => fileRef.current?.click()} disabled={uploading}>
+              {uploading ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
+              {uploading ? "Uploading…" : "Choose tender document"}
+            </Button>
+            <ScanButton projectId={id} label="Or scan with camera" />
+          </CardContent>
+        </Card>
+      )}
+      {nextAction === "process" && (
+        <Card className="border-primary/40">
+          <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+            <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary"><Play size={24} /></span>
+            <div>
+              <h2 className="text-lg font-semibold">Ready when you are</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {data.documents[0]?.filename ? <><strong className="text-foreground">{data.documents[0].filename}</strong> is uploaded. </> : "Your document is uploaded. "}
+                Process it to extract the BOQ, pricing and review flags.
+              </p>
+            </div>
+            {data.documents[0] && (
+              <Button size="lg" onClick={() => startProcessing(data.documents[0]._id)} disabled={running}>
+                {running ? <Loader2 size={16} className="animate-spin" /> : <Play size={16} />} Process tender
+              </Button>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* Processing pipeline */}
       {(running || project.currentStage) && (
         <Card>
@@ -310,63 +359,69 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
         </Card>
       )}
 
-      {/* AI strategy briefing (audio) */}
-      {project.strategyNarrative && <StrategyBriefing narrative={project.strategyNarrative} projectId={id} audioParts={project.strategyAudioParts ?? 0} />}
+      {/* Full workspace — only once there's output (BOQ) or processing is underway/done.
+          A fresh draft instead sees the focused next-action hero above. */}
+      {showWorkspace && (
+        <>
+          {/* AI strategy briefing (audio) */}
+          {project.strategyNarrative && <StrategyBriefing narrative={project.strategyNarrative} projectId={id} audioParts={project.strategyAudioParts ?? 0} />}
 
-      {/* Generated deliverables */}
-      <GeneratedDocs projectId={id} refreshKey={status?.currentStage} running={running} />
+          {/* Generated deliverables */}
+          <GeneratedDocs projectId={id} refreshKey={status?.currentStage} running={running} />
 
-      {/* Upload */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Tender Documents</CardTitle>
-          <CardDescription>PDF, DOCX or TXT — up to 20MB.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="flex justify-end">
-            <ScanButton projectId={id} label="Scan with camera" />
+          {/* Upload */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Tender Documents</CardTitle>
+              <CardDescription>PDF, DOCX or TXT — up to 20MB.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="flex justify-end">
+                <ScanButton projectId={id} label="Scan with camera" />
+              </div>
+              <input ref={fileRef} type="file" accept=".pdf,.docx,.txt" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
+              <button
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading || running}
+                className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border py-8 text-sm text-muted-foreground hover:bg-muted/40 disabled:opacity-50 cursor-pointer"
+              >
+                {uploading ? <Loader2 className="animate-spin" /> : <UploadCloud size={24} />}
+                {uploading ? "Uploading…" : "Click to upload a tender document"}
+              </button>
+              {data.documents.length > 0 && (
+                <ul className="divide-y divide-border rounded-lg border border-border">
+                  {data.documents.map((d) => (
+                    <li key={d._id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                      <span className="flex min-w-0 items-center gap-2"><FileText size={14} className="shrink-0 text-muted-foreground" /><span className="truncate">{d.filename}</span>
+                        <span className="text-xs text-muted-foreground">({(d.sizeBytes / 1024).toFixed(0)} KB)</span></span>
+                      <Button size="sm" disabled={running || project.status === "completed"} title={project.status === "completed" ? "This tender has been analysed." : undefined} onClick={() => startProcessing(d._id)}>
+                        {running ? <Loader2 size={12} className="animate-spin" /> : project.status === "completed" ? <CheckCircle2 size={12} /> : <Play size={12} />} {running ? "Processing…" : project.status === "completed" ? "Processed" : "Process"}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Tabs */}
+          <div className="flex flex-wrap gap-1 border-b border-border">
+            {([["overview", "Tender Info"], ["boq", `BOQ (${data.boqItems.length})`], ["pricing", `Pricing (${pricing?.length ?? 0})`], ["review", `Review (${flagged.length})`], ["history", "History"]] as [Tab, string][]).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => { setTab(key); if (key === "pricing" || key === "review") loadPricing(); }}
+                className={`rounded-t-md px-4 py-2 text-sm font-medium transition-colors cursor-pointer ${tab === key ? "border-b-2 border-primary text-primary" : "text-muted-foreground hover:text-foreground"}`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-          <input ref={fileRef} type="file" accept=".pdf,.docx,.txt" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); e.target.value = ""; }} />
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={uploading || running}
-            className="flex w-full flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border py-8 text-sm text-muted-foreground hover:bg-muted/40 disabled:opacity-50 cursor-pointer"
-          >
-            {uploading ? <Loader2 className="animate-spin" /> : <UploadCloud size={24} />}
-            {uploading ? "Uploading…" : "Click to upload a tender document"}
-          </button>
-          {data.documents.length > 0 && (
-            <ul className="divide-y divide-border rounded-lg border border-border">
-              {data.documents.map((d) => (
-                <li key={d._id} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
-                  <span className="flex min-w-0 items-center gap-2"><FileText size={14} className="shrink-0 text-muted-foreground" /><span className="truncate">{d.filename}</span>
-                    <span className="text-xs text-muted-foreground">({(d.sizeBytes / 1024).toFixed(0)} KB)</span></span>
-                  <Button size="sm" disabled={running || project.status === "completed"} title={project.status === "completed" ? "This tender has been analysed." : undefined} onClick={() => startProcessing(d._id)}>
-                    {running ? <Loader2 size={12} className="animate-spin" /> : project.status === "completed" ? <CheckCircle2 size={12} /> : <Play size={12} />} {running ? "Processing…" : project.status === "completed" ? "Processed" : "Process"}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+        </>
+      )}
 
-      {/* Tabs */}
-      <div className="flex flex-wrap gap-1 border-b border-border">
-        {([["overview", "Tender Info"], ["boq", `BOQ (${data.boqItems.length})`], ["pricing", `Pricing (${pricing?.length ?? 0})`], ["review", `Review (${flagged.length})`], ["history", "History"]] as [Tab, string][]).map(([key, label]) => (
-          <button
-            key={key}
-            onClick={() => { setTab(key); if (key === "pricing" || key === "review") loadPricing(); }}
-            className={`rounded-t-md px-4 py-2 text-sm font-medium transition-colors cursor-pointer ${tab === key ? "border-b-2 border-primary text-primary" : "text-muted-foreground hover:text-foreground"}`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {tab === "overview" && <TenderInfo data={data} />}
-      {tab === "boq" && <BoqTable items={data.boqItems} />}
-      {tab === "pricing" && (
+      {showWorkspace && tab === "overview" && <TenderInfo data={data} />}
+      {showWorkspace && tab === "boq" && <BoqTable items={data.boqItems} />}
+      {showWorkspace && tab === "pricing" && (
         <div className="space-y-3">
           <MarginBar
             projectId={id}
@@ -395,8 +450,8 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
           )}
         </div>
       )}
-      {tab === "review" && <PricingTable pricing={flagged} marginPct={data.project.profitMarginPct} contingencyPct={data.project.contingencyPct} onOverride={setOverrideTarget} reviewMode />}
-      {tab === "history" && <JobHistory jobs={data.jobs} />}
+      {showWorkspace && tab === "review" && <PricingTable pricing={flagged} marginPct={data.project.profitMarginPct} contingencyPct={data.project.contingencyPct} onOverride={setOverrideTarget} reviewMode />}
+      {showWorkspace && tab === "history" && <JobHistory jobs={data.jobs} />}
 
       <OverrideModal
         record={overrideTarget}
